@@ -1,1 +1,44 @@
 .env
+
+# Model checkpoints (large binary files)
+models/checkpoints/
+*.bin
+*.pt
+*.ckpt
+*.safetensors
+
+# Hugging Face cache
+.huggingface/
+.cache/
+
+# Training artifacts
+runs/
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data
+dataset/*.jsonl
+dataset/data/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db

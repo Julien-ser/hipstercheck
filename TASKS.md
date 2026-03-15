@@ -21,7 +21,7 @@ Validate via Reddit's r/Startup_Ideas or indie hacker forums.
 
 ## Phase 2: Model Training & Code Analysis
 - [x] **Collect code review dataset** - Scrape GitHub PRs with reviews (label: bug, optimization, best practice); or use CodeReviewer dataset from Hugging Face; preprocess into (code, review) pairs
-- [ ] **Select base LLM for fine-tuning** - Choose lightweight open-source model (e.g., `codellama-7b`, `microsoft/phi-2`, `bigcode/starcoder`) from Hugging Face; set up GPU (Colab/Vercel GPU) or CPU optimization
+ - [x] **Select base LLM for fine-tuning** - Choose lightweight open-source model (e.g., `codellama-7b`, `microsoft/phi-2`, `bigcode/starcoder`) from Hugging Face; set up GPU (Colab/Vercel GPU) or CPU optimization
 - [ ] **Fine-tune model on review generation** - Use LoRA or QLoRA for efficient tuning; train to output structured review: {severity, line_number, suggestion, explanation}; validate on held-out set
 - [ ] ] **Create prompt engineering templates** - Design system prompts for Python (PEP8), ROS2 (best practices), ML frameworks (overfitting, drift); store in `prompts/` directory with versioning
 

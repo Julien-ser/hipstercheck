@@ -130,9 +130,87 @@ hipstercheck/
 
 ### Phase 2: Model Training & Code Analysis
 - [x] Collect code review dataset
-- [ ] Select base LLM for fine-tuning
+- [x] Select base LLM for fine-tuning
 - [ ] Fine-tune model on review generation
 - [ ] Create prompt engineering templates
+
+### Selected Model: Microsoft Phi-2
+
+We've selected **microsoft/phi-2** (2.7B parameters) as our base model because it's:
+- **Lightweight**: Only 2.7B parameters (vs 7B+ for alternatives)
+- **Fast**: <100ms inference on CPU or small GPU
+- **Capable**: Excellent code understanding and generation
+- **Cost-Effective**: MIT license, runs on modest hardware
+- **Deployable**: Works with LoRA for efficient fine-tuning
+
+#### Fine-Tuning Approach
+We use **LoRA (Low-Rank Adaptation)** for efficient fine-tuning:
+- Trains only 1-2% of parameters
+- Minimal storage (LoRA weights ~50-100MB)
+- Fast training (2-4 hours on T4 GPU)
+- Can run inference without full fine-tuned model
+
+#### Training Resources
+- **GPU**: NVIDIA T4 (16GB) or RTX 3060+ (12GB minimum)
+- **CPU**: 32GB RAM (slower, for development)
+- **Time**: ~3 hours for 3 epochs on T4
+- **Platform**: Google Colab Pro, Vercel GPU, or local GPU
+
+#### File Structure
+```
+models/
+├── README.md              # Model selection and setup guide
+├── config.yaml            # Training configuration
+├── train.py               # Fine-tuning script
+├── inference.py           # Inference wrapper for FastAPI
+├── prompts/               # Language-specific prompt templates
+│   ├── python.txt        # Python/PEP8 review guidelines
+│   ├── ros2.txt          # ROS2 best practices
+│   └── ml.txt            # ML framework checks (PyTorch, TF, sklearn)
+└── tests/
+    └── test_inference.py  # Unit tests
+```
+
+#### How to Fine-Tune
+
+1. **Install training dependencies** (already in requirements.txt):
+   ```bash
+   pip install torch transformers peft accelerate datasets
+   ```
+
+2. **Prepare dataset** (already collected):
+   ```bash
+   # Dataset is in dataset/split_*.jsonl
+   # Format: {"code": "...", "review": {...}}
+   ```
+
+3. **Run training**:
+   ```bash
+   # With GPU
+   python models/train.py
+
+   # With CPU (slow)
+   # Edit config.yaml: set use_gpu: false
+   # python models/train.py
+   ```
+
+4. **Monitor training**:
+   - Checkpoints saved to `models/checkpoints/phi2-code-review/`
+   - Training logs in console
+   - Best model automatically saved
+
+5. **Deploy fine-tuned model**:
+   - Set environment variable `MODEL_PATH` to checkpoint directory
+   - FastAPI backend will load LoRA weights automatically
+
+#### Prompt Engineering
+
+Each language has specialized prompts in `models/prompts/`:
+- **Python**: PEP8, style, common bugs
+- **ROS2**: Node lifecycle, QoS, callbacks, launch files
+- **ML**: Data leakage, overfitting, reproducibility
+
+These templates ensure consistent, high-quality reviews across all supported languages.
 
 ### Phase 3: App Integration & Deployment Prep
 - [ ] Wrap model in FastAPI microservice
@@ -151,7 +229,8 @@ hipstercheck/
 ### Tech Stack
 - **Frontend**: Streamlit (responsive UI, rapid prototyping)
 - **Backend**: FastAPI (async API, high performance)
-- **AI Model**: Fine-tuned open-source LLM (CodeLlama/StarCoder/Phi-2)
+- **AI Model**: Phi-2 (2.7B parameters) fine-tuned with LoRA for code review
+- **Training**: PyTorch + Hugging Face Transformers + PEFT (LoRA)
 - **Database**: SQLite/Redis for caching
 - **Deployment**: Vercel (serverless)
 - **Payment**: Stripe Checkout
