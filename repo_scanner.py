@@ -8,6 +8,7 @@ and filter files by supported types for code analysis.
 import os
 import tempfile
 import shutil
+import time
 from pathlib import Path
 from typing import List, Dict, Set, Optional
 from datetime import datetime, timedelta
@@ -15,7 +16,9 @@ import hashlib
 
 from github import Github
 from github.Repository import Repository
+from github.GithubException import RateLimitExceededException, UnknownObjectException
 import git
+import redis
 
 
 # Supported file extensions for analysis
@@ -65,18 +68,70 @@ class RepoScanner:
         """
         self.github = Github(github_token)
         self.cache_ttl = timedelta(hours=cache_ttl_hours)
-        self._cache: Dict[str, Dict] = {}
+
+        # Initialize Redis cache if configured, otherwise use in-memory
+        self.redis_url = os.getenv(
+            "REDIS_URL", os.getenv("REDIS", "redis://localhost:6379")
+        )
+        self.use_redis = False
+        self._cache: Dict[str, Dict] = {}  # Fallback in-memory cache
+
+        try:
+            self.redis_client = redis.from_url(
+                self.redis_url, socket_timeout=5, socket_connect_timeout=5
+            )
+            # Test connection
+            self.redis_client.ping()
+            self.use_redis = True
+            print("✅ Redis cache connected")
+        except Exception as e:
+            print(f"⚠️ Redis not available, using in-memory cache: {e}")
+            self.redis_client = None
 
     def _generate_cache_key(self, repo_full_name: str, branch: str = None) -> str:
         """Generate a unique cache key for a repository."""
         key_str = f"{repo_full_name}:{branch or 'default'}"
         return hashlib.md5(key_str.encode()).hexdigest()
 
+    def get_from_redis(self, key: str) -> Optional[Dict]:
+        """Retrieve data from Redis."""
+        if not self.use_redis or not self.redis_client:
+            return None
+        try:
+            data = self.redis_client.get(f"hipstercheck:{key}")
+            if data:
+                import pickle
+
+                return pickle.loads(data)
+        except Exception as e:
+            print(f"Redis get error: {e}")
+        return None
+
+    def set_to_redis(self, key: str, value: Dict, ttl_seconds: int):
+        """Store data in Redis with TTL."""
+        if not self.use_redis or not self.redis_client:
+            return
+        try:
+            import pickle
+
+            serialized = pickle.dumps(value)
+            self.redis_client.setex(f"hipstercheck:{key}", ttl_seconds, serialized)
+        except Exception as e:
+            print(f"Redis set error: {e}")
+
     def get_cached_scan(
         self, repo_full_name: str, branch: str = None
     ) -> Optional[Dict]:
         """Retrieve cached scan results if available and not expired."""
         cache_key = self._generate_cache_key(repo_full_name, branch)
+
+        # Try Redis first
+        if self.use_redis:
+            cached = self.get_from_redis(cache_key)
+            if cached:
+                return cached["data"] if "data" in cached else cached
+
+        # Fallback to in-memory cache
         if cache_key in self._cache:
             cached = self._cache[cache_key]
             if datetime.now() - cached["timestamp"] < self.cache_ttl:
@@ -86,7 +141,47 @@ class RepoScanner:
     def cache_scan(self, repo_full_name: str, scan_data: Dict, branch: str = None):
         """Cache scan results."""
         cache_key = self._generate_cache_key(repo_full_name, branch)
-        self._cache[cache_key] = {"timestamp": datetime.now(), "data": scan_data}
+        data_to_store = {"timestamp": datetime.now(), "data": scan_data}
+
+        # Store in Redis if available
+        if self.use_redis:
+            self.set_to_redis(
+                cache_key, data_to_store, int(self.cache_ttl.total_seconds())
+            )
+
+        # Also store in memory as fallback
+        self._cache[cache_key] = data_to_store
+
+    def check_rate_limit(self) -> Dict:
+        """Check current GitHub API rate limit status."""
+        try:
+            rate_limit = self.github.get_rate_limit()
+            return {
+                "limit": rate_limit.core.limit,
+                "remaining": rate_limit.core.remaining,
+                "reset_time": rate_limit.core.reset.isoformat()
+                if rate_limit.core.reset
+                else None,
+                "reset_epoch": rate_limit.core.reset.timestamp()
+                if rate_limit.core.reset
+                else None,
+            }
+        except Exception as e:
+            return {"error": str(e), "limit": 0, "remaining": 0}
+
+    def wait_for_rate_limit(self, buffer: int = 10):
+        """Wait if rate limit is nearly exhausted."""
+        rate_info = self.check_rate_limit()
+        if "error" not in rate_info:
+            remaining = rate_info["remaining"]
+            if remaining <= buffer:
+                reset_time = rate_info.get("reset_epoch", time.time() + 3600)
+                wait_seconds = max(1, reset_time - time.time() + 5)  # Add 5s buffer
+                if wait_seconds > 0:
+                    print(
+                        f"⚠️ Rate limit low ({remaining} remaining). Waiting {wait_seconds:.0f}s..."
+                    )
+                    time.sleep(wait_seconds)
 
     def scan_repository(self, repo_full_name: str, progress_callback=None) -> Dict:
         """
@@ -104,8 +199,16 @@ class RepoScanner:
         if cached:
             return cached
 
+        # Check rate limit before proceeding
+        self.wait_for_rate_limit(buffer=int(os.getenv("RATE_LIMIT_BUFFER", "10")))
+
         # Get repository object
-        repo = self.github.get_repo(repo_full_name)
+        try:
+            repo = self.github.get_repo(repo_full_name)
+        except RateLimitExceededException:
+            raise Exception("GitHub API rate limit exceeded. Please try again later.")
+        except UnknownObjectException:
+            raise Exception(f"Repository '{repo_full_name}' not found or inaccessible.")
 
         # Create temporary directory for cloning
         temp_dir = tempfile.mkdtemp(prefix=f"hipstercheck_{repo.name}_")
@@ -114,16 +217,17 @@ class RepoScanner:
             # Clone repository
             clone_url = repo.clone_url
             if repo.private:
-                # For private repos, use token auth
-                auth_url = clone_url.replace(
-                    "https://",
-                    f"https://{self.github._Github__requester._Requester__authorizationHeader}@",
+                # For private repos, construct authenticated URL using token
+                auth_token = self.github._Github__requester._Requester__authorizationHeader.replace(
+                    "Bearer ", ""
                 )
-                clone_url = auth_url
+                clone_url = clone_url.replace(
+                    "https://",
+                    f"https://{auth_token}@",
+                )
 
-            git.Repo.clone_from(
-                clone_url, temp_dir, depth=1, progress=git.RemoteProgress()
-            )
+            # Clone without progress to avoid type issues
+            git.Repo.clone_from(clone_url, temp_dir, depth=1)
 
             # Walk file tree
             file_tree = self._extract_file_tree(

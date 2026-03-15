@@ -95,10 +95,56 @@ if st.session_state.token and st.session_state.github_user:
     col1, col2 = st.columns([1, 4])
     with col1:
         st.image(user.avatar_url, width=100)
-    with col2:
-        st.title(f"👋 Welcome, {user.login}!")
-        st.markdown(f"**Name:** {user.name or 'N/A'}  \n**Bio:** {user.bio or 'N/A'}")
-    st.markdown("---")
+     with col2:
+         st.title(f"👋 Welcome, {user.login}!")
+         st.markdown(f"**Name:** {user.name or 'N/A'}  \n**Bio:** {user.bio or 'N/A'}")
+     st.markdown("---")
+     
+     # Rate limit and cache status
+     col1, col2, col3 = st.columns(3)
+     with col1:
+         if st.button("🔄 Refresh Rate Limit", type="secondary", use_container_width=True):
+             st.rerun()
+     with col2:
+         if st.session_state.repo_scanner and st.session_state.repo_scanner.use_redis:
+             st.success("✅ Redis Cache")
+         else:
+             st.info("⚠️ Memory Cache")
+     with col3:
+         if st.button("🗑️ Clear Cache", type="secondary", use_container_width=True):
+             if st.session_state.repo_scanner:
+                 st.session_state.repo_scanner._cache.clear()
+                 try:
+                     if st.session_state.repo_scanner.use_redis and st.session_state.repo_scanner.redis_client:
+                         st.session_state.repo_scanner.redis_client.flushdb()
+                 except:
+                     pass
+             st.success("Cache cleared!")
+             st.rerun()
+     
+     # Display GitHub API rate limit
+     if st.session_state.repo_scanner:
+         rate_info = st.session_state.repo_scanner.check_rate_limit()
+         if "error" not in rate_info:
+             remaining = rate_info.get("remaining", 0)
+             limit = rate_info.get("limit", 0)
+             pct = (remaining / limit * 100) if limit > 0 else 0
+            
+             if pct < 20:
+                 st.error(f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
+             elif pct < 50:
+                 st.warning(f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
+             else:
+                 st.info(f"✅ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
+            
+             if rate_info.get("reset_time"):
+                 from datetime import datetime
+                 reset_dt = datetime.fromisoformat(rate_info["reset_time"])
+                 st.caption(f"Resets at: {reset_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+         else:
+             st.error(f"Rate limit check failed: {rate_info['error']}")
+     
+     st.markdown("---")
 
     # Display connected repositories
     st.header("📚 Your GitHub Repositories")

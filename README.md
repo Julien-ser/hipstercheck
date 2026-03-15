@@ -51,7 +51,40 @@ Before running the app, you need to create a GitHub OAuth App:
 pip install -r requirements.txt
 ```
 
-### 3. Run the App
+### 5. (Optional) Configure Redis for Caching
+
+To enable persistent caching across app restarts and multiple users:
+
+1. Install and run Redis:
+   ```bash
+   # Ubuntu/Debian
+   sudo apt-get install redis-server
+   sudo systemctl start redis
+   
+   # macOS
+   brew install redis
+   brew services start redis
+   
+   # Docker
+   docker run -p 6379:6379 redis:alpine
+   ```
+
+2. Add to your `.env`:
+   ```bash
+   REDIS_URL=redis://localhost:6379/0
+   ```
+
+   If Redis is not available, the app will fall back to in-memory caching.
+
+### 6. (Optional) Configure Rate Limit Buffer
+
+The app automatically monitors GitHub API rate limits and will wait when approaching the limit. You can adjust the buffer:
+
+```bash
+RATE_LIMIT_BUFFER=10
+```
+
+This sets how many remaining requests trigger a wait before the reset time.
 
 ```bash
 streamlit run streamlit_app.py
