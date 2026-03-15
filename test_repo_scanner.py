@@ -71,9 +71,10 @@ class TestCacheOperations:
         test_data = {"repo_name": "test/repo", "file_tree": []}
         scanner.cache_scan("test/repo", test_data)
 
-        # Manually expire cache by setting old timestamp
+        # Manually expire cache by setting old timestamp on the correct cache key
+        cache_key = scanner._generate_cache_key("test/repo")
         old_time = datetime.now() - scanner.cache_ttl - timedelta(seconds=1)
-        scanner._cache["key"] = {"timestamp": old_time, "data": test_data}
+        scanner._cache[cache_key] = {"timestamp": old_time, "data": test_data}
         result = scanner.get_cached_scan("test/repo")
         assert result is None
 
