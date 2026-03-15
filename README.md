@@ -104,6 +104,13 @@ hipstercheck/
 ├── streamlit_app.py          # Main Streamlit frontend
 ├── requirements.txt          # Python dependencies
 ├── .env                      # Environment variables (create from .env.example)
+├── dataset/                  # Code review dataset collection
+│   ├── data_collector.py    # Dataset collection script
+│   ├── code_reviews.jsonl   # Combined dataset (generated)
+│   ├── split_train.jsonl    # Training split
+│   ├── split_val.jsonl      # Validation split
+│   ├── split_test.jsonl     # Test split
+│   └── README.md            # Dataset documentation
 ├── backend/                 # FastAPI microservice (Phase 3)
 │   └── main.py
 ├── models/                  # Fine-tuned AI model
@@ -122,7 +129,7 @@ hipstercheck/
 - [ ] Configure GitHub API rate limiting
 
 ### Phase 2: Model Training & Code Analysis
-- [ ] Collect code review dataset
+- [x] Collect code review dataset
 - [ ] Select base LLM for fine-tuning
 - [ ] Fine-tune model on review generation
 - [ ] Create prompt engineering templates

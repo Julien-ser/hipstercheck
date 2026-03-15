@@ -226,7 +226,7 @@ jobs:
         cat wiggum-system-report.md
     
     - name: Upload system report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: wiggum-system-report
         path: wiggum-system-report.md
