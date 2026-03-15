@@ -20,36 +20,49 @@ hipstercheck is an AI-powered code review tool that scans GitHub repositories fo
 - Python 3.9+
 - Git
 - GitHub account (for OAuth)
-- Hugging Face account (for AI model)
+- Hugging Face account (for AI model, Phase 2)
 
-### Setup Instructions
+### 1. Configure GitHub OAuth App
 
-1. **Clone the repository**:
+Before running the app, you need to create a GitHub OAuth App:
+
+1. Go to [GitHub Developer Settings → OAuth Apps → New OAuth App](https://github.com/settings/developers)
+2. Fill in:
+   - **Application name**: hipstercheck (or your preferred name)
+   - **Homepage URL**: `http://localhost:8501` (or your deployed URL)
+   - **Authorization callback URL**: `http://localhost:8501` (or your deployed URL)
+3. Click "Register application"
+4. Copy the **Client ID** (generate a new client secret)
+5. Create a `.env` file from `.env.example` and add your credentials:
    ```bash
-   cd hipstercheck
+   cp .env.example .env
    ```
-
-2. **Install dependencies**:
+6. Edit `.env`:
    ```bash
-   pip install -r requirements.txt
+   GITHUB_CLIENT_ID=your_client_id
+   GITHUB_CLIENT_SECRET=your_client_secret
+   APP_URL=http://localhost:8501
    ```
+   *(Note: `APP_URL` must match the callback URL from step 2)*
 
-3. **Configure environment variables**:
-   Create a `.env` file with:
-   ```bash
-   GITHUB_CLIENT_ID=your_github_client_id
-   GITHUB_CLIENT_SECRET=your_github_client_secret
-   HF_TOKEN=your_huggingface_token
-   STRIPE_SECRET_KEY=your_stripe_secret_key
-   STRIPE_PUBLIC_KEY=your_stripe_public_key
-   ```
+### 2. Install Dependencies
 
-4. **Run the Streamlit app**:
-   ```bash
-   streamlit run streamlit_app.py
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-5. **Open browser**: Navigate to `http://localhost:8501`
+### 3. Run the App
+
+```bash
+streamlit run streamlit_app.py
+```
+
+### 4. Authenticate & Use
+
+1. Click **"Login with GitHub"** in the app
+2. Authorize the OAuth app on GitHub
+3. View your repositories in the dashboard
+4. (Future) Select a repo to analyze code
 
 ## Project Structure
 
@@ -71,7 +84,7 @@ hipstercheck/
 
 ### Phase 1: Foundation & GitHub Integration ✅ In Progress
 - [x] Initialize Streamlit project structure
-- [ ] Implement GitHub OAuth authentication
+- [x] Implement GitHub OAuth authentication
 - [ ] Build repo scanning engine
 - [ ] Configure GitHub API rate limiting
 
