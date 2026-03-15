@@ -14,7 +14,7 @@ Day 4: Test with your own projects, deploy on Vercel.
 Validate via Reddit's r/Startup_Ideas or indie hacker forums.
 
 ## Phase 1: Foundation & GitHub Integration
-- [x] **Initialize Streamlit project structure** - Create `streamlit_app.py`, `requirements.txt` with Streamlit, FastAPI, PyGithub; set up virtual environment and basic app layout
+- [ ] **Initialize Streamlit project structure** - Create `streamlit_app.py`, `requirements.txt` with Streamlit, FastAPI, PyGithub; set up virtual environment and basic app layout
 - [ ] **Implement GitHub OAuth authentication** - Use GitHub App or OAuth with `streamlit-authenticator`; store user tokens securely; display connected repos
 - [ ] **Build repo scanning engine** - Use PyGithub to clone/fetch repos, extract file trees, support Python/ROS2 (.py, .launch, .msg) and ML frameworks (.ipynb, .yaml for ML models)
 - [ ] ] **Configure GitHub API rate limiting** - Implement caching with Redis or Streamlit's session state; handle 60 req/hr limit; show progress bar during scans
