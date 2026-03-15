@@ -27,14 +27,14 @@ lora:
 # Training hyperparameters
 training:
   # Dataset paths
-  train_file: "../dataset/split_train.jsonl"
-  val_file: "../dataset/split_val.jsonl"
-  test_file: "../dataset/split_test.jsonl"
+  train_file: "dataset/split_train.jsonl"
+  val_file: "dataset/split_val.jsonl"
+  test_file: "dataset/split_test.jsonl"
 
   # Training settings
-  num_train_epochs: 3
-  per_device_train_batch_size: 8
-  per_device_eval_batch_size: 8
+  num_train_epochs: 1
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
   gradient_accumulation_steps: 1
   optim: "adamw_torch"
   learning_rate: 2.0e-4

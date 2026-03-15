@@ -1,0 +1,16 @@
+{
+  "total_samples": 500,
+  "severity_dist": {
+    "medium": 147,
+    "high": 198,
+    "low": 155
+  },
+  "category_dist": {
+    "optimization": 97,
+    "security": 56,
+    "style": 205,
+    "bug": 142
+  },
+  "avg_code_length": 84.544,
+  "avg_review_length": 424.688
+}
