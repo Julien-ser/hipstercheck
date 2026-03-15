@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit_authenticator as stauth
 from github import Github
 import os
+from repo_scanner import RepoScanner
 
 # Page configuration
 st.set_page_config(
@@ -49,6 +50,14 @@ if "github_user" not in st.session_state:
     st.session_state.github_user = None
 if "repos" not in st.session_state:
     st.session_state.repos = None
+if "repo_scanner" not in st.session_state:
+    st.session_state.repo_scanner = None
+if "scan_result" not in st.session_state:
+    st.session_state.scan_result = None
+if "selected_files" not in st.session_state:
+    st.session_state.selected_files = []
+if "selected_repo" not in st.session_state:
+    st.session_state.selected_repo = None
 
 # Handle OAuth callback
 query_params = st.query_params
@@ -65,6 +74,8 @@ if "code" in query_params and "state" in query_params:
                 user = gh.get_user()
                 st.session_state.github_user = user
                 st.session_state.repos = list(user.get_repos())
+                # Initialize repo scanner
+                st.session_state.repo_scanner = RepoScanner(token["access_token"])
                 # Clear query parameters and rerun
                 st.query_params.clear()
                 st.rerun()
@@ -151,15 +162,218 @@ if st.session_state.token and st.session_state.github_user:
             st.info("No repositories match the selected filters.")
 
         st.markdown("---")
-        st.header("🔍 Next: Code Analysis")
+        st.header("🔍 Repository Scanner")
         st.markdown("""
-        Select a repository above, then choose files to analyze:
-        1. Pick a repository from the table
-        2. Select specific files or scan the entire repo
-        3. Click **Analyze Code** to get AI-powered review
+        Select a repository to scan and analyze files:
+        1. Pick a repository from above
+        2. Click **Scan Repository** to extract file tree
+        3. Select specific files for analysis
+        4. Click **Analyze Selected Files** for AI-powered review
         """)
-        # Placeholder for analysis UI (Phase 3)
-        st.info("🚧 Code analysis feature coming in Phase 3!")
+
+        # Repository selection for scanning
+        if repos:
+            # Create list of repo full names for selectbox
+            repo_options = [r.full_name for r in repos]
+            selected_repo = st.selectbox(
+                "Select repository to scan",
+                options=repo_options,
+                index=None,
+                placeholder="Choose a repository...",
+                key="repo_select",
+            )
+
+            if selected_repo:
+                st.session_state.selected_repo = selected_repo
+
+                col_scan1, col_scan2 = st.columns([2, 1])
+                with col_scan1:
+                    scan_button = st.button(
+                        "🔍 Scan Repository", type="primary", use_container_width=True
+                    )
+                with col_scan2:
+                    if st.button("🔄 Clear Scan", use_container_width=True):
+                        st.session_state.scan_result = None
+                        st.session_state.selected_files = []
+                        st.rerun()
+
+                if scan_button or st.session_state.scan_result:
+                    # Show progress during scan
+                    with st.spinner(f"Scanning {selected_repo}..."):
+                        try:
+                            if scan_button or not st.session_state.scan_result:
+                                # Perform the scan
+                                progress_bar = st.progress(
+                                    0, text="Initializing scan..."
+                                )
+
+                                def progress_callback(repo_name, current, total):
+                                    pct = (
+                                        int((current / total) * 100) if total > 0 else 0
+                                    )
+                                    progress_bar.progress(
+                                        pct, text=f"Scanning files: {current}/{total}"
+                                    )
+
+                                # Execute scan
+                                scan_result = (
+                                    st.session_state.repo_scanner.scan_repository(
+                                        selected_repo,
+                                        progress_callback=progress_callback,
+                                    )
+                                )
+                                st.session_state.scan_result = scan_result
+                                progress_bar.empty()
+
+                            # Display scan results
+                            result = st.session_state.scan_result
+                            st.success(
+                                f"✅ Scan complete! Found {result['total_files']} files ({result['supported_files']} supported)"
+                            )
+
+                            # Summary metrics
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Total Files", result["total_files"])
+                            with col2:
+                                st.metric("Supported Files", result["supported_files"])
+                            with col3:
+                                coverage = (
+                                    (
+                                        result["supported_files"]
+                                        / result["total_files"]
+                                        * 100
+                                    )
+                                    if result["total_files"] > 0
+                                    else 0
+                                )
+                                st.metric("Coverage", f"{coverage:.1f}%")
+
+                            # File tree display
+                            st.markdown("---")
+                            st.subheader("📁 File Tree")
+
+                            # Filter options
+                            col_filter1, col_filter2 = st.columns(2)
+                            with col_filter1:
+                                show_only_supported = st.checkbox(
+                                    "Show only supported files", value=True
+                                )
+                            with col_filter2:
+                                search_filter = st.text_input(
+                                    "🔎 Search files", placeholder="Filter by name..."
+                                )
+
+                            # Filter files
+                            file_tree = result["file_tree"]
+                            if show_only_supported:
+                                file_tree = [f for f in file_tree if f["is_supported"]]
+
+                            if search_filter:
+                                search_lower = search_filter.lower()
+                                file_tree = [
+                                    f
+                                    for f in file_tree
+                                    if search_lower in f["path"].lower()
+                                ]
+
+                            # Create dataframe for display
+                            if file_tree:
+                                file_data = []
+                                for f in file_tree:
+                                    file_data.append(
+                                        {
+                                            "Select": False,
+                                            "Path": f["path"],
+                                            "Name": f["name"],
+                                            "Language": f["language"] or "Other",
+                                            "Size (KB)": f["size"] / 1024,
+                                        }
+                                    )
+
+                                # Use data_editor for selection
+                                edited_df = st.data_editor(
+                                    file_data,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        "Select": st.column_config.CheckboxColumn(
+                                            "✓", width="small"
+                                        ),
+                                        "Path": st.column_config.TextColumn(
+                                            "File Path", width="large"
+                                        ),
+                                        "Name": st.column_config.TextColumn(
+                                            "Name", width="medium"
+                                        ),
+                                        "Language": st.column_config.TextColumn(
+                                            "Language", width="medium"
+                                        ),
+                                        "Size (KB)": st.column_config.NumberColumn(
+                                            "Size (KB)", format="%.1f", width="small"
+                                        ),
+                                    },
+                                    disabled=["Path", "Name", "Language", "Size (KB)"],
+                                    key="file_editor",
+                                )
+
+                                # Update selected files
+                                selected_files = []
+                                if "Select" in edited_df.columns:
+                                    for idx, row in edited_df.iterrows():
+                                        if row["Select"]:
+                                            # Find original file info
+                                            original_file = next(
+                                                (
+                                                    f
+                                                    for f in result["file_tree"]
+                                                    if f["path"] == row["Path"]
+                                                ),
+                                                None,
+                                            )
+                                            if original_file:
+                                                selected_files.append(original_file)
+
+                                st.session_state.selected_files = selected_files
+
+                                # Display selection info
+                                if len(selected_files) > 0:
+                                    st.info(
+                                        f"📌 Selected {len(selected_files)} files for analysis"
+                                    )
+
+                                    # Analyze button
+                                    if st.button(
+                                        "🚀 Analyze Selected Files",
+                                        type="primary",
+                                        use_container_width=True,
+                                    ):
+                                        st.session_state.analyze_triggered = True
+                                        st.rerun()
+
+                                    # Show placeholder for analysis results (Phase 3)
+                                    if hasattr(st.session_state, "analyze_triggered"):
+                                        st.info(
+                                            "🚧 AI analysis will be implemented in Phase 3! The FastAPI backend will process these files."
+                                        )
+                                else:
+                                    st.caption(
+                                        "Select files by checking the boxes above"
+                                    )
+                            else:
+                                st.warning("No files match the current filters")
+
+                        except Exception as e:
+                            st.error(f"❌ Scan failed: {str(e)}")
+                            st.exception(e)
+                else:
+                    st.info(
+                        "👆 Select a repository and click **Scan Repository** to begin"
+                    )
+            else:
+                st.info("📋 Please select a repository from the dropdown above")
+        else:
+            st.warning("No repositories available to scan")
 
     else:
         st.info(
