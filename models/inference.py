@@ -135,23 +135,91 @@ Review:"""
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
 
-        # Create prompt
+        # Get model's maximum position embeddings
+        if hasattr(self.model, "config") and hasattr(
+            self.model.config, "max_position_embeddings"
+        ):
+            max_model_len = self.model.config.max_position_embeddings
+        else:
+            max_model_len = self.tokenizer.model_max_length
+
+        # Proactively truncate code to fit within context window
+        # Compute base prompt length (without code)
+        base_prompt = self.prompt_template.format(code="", language=language)
+        base_tokens = self.tokenizer(base_prompt, return_tensors="pt")
+        base_len = base_tokens.input_ids.shape[1]
+        # Determine allowed code token count (leave small margin)
+        allowed_code_len = max_model_len - base_len - 5
+        if allowed_code_len <= 0:
+            return {
+                "severity": "error",
+                "line_number": 0,
+                "category": "system_error",
+                "suggestion": "Prompt template too long for model context window",
+                "explanation": f"The base prompt length ({base_len}) exceeds model capacity ({max_model_len}).",
+                "code_example": None,
+            }
+
+        # Tokenize code without special tokens
+        code_ids = self.tokenizer.encode(code, add_special_tokens=False)
+        if len(code_ids) > allowed_code_len:
+            # Truncate code from the beginning (keep the end) to preserve recent code
+            truncated_code_ids = code_ids[:allowed_code_len]
+            truncated_code = self.tokenizer.decode(
+                truncated_code_ids, skip_special_tokens=True
+            )
+            logger.warning(
+                f"Code truncated from {len(code_ids)} to {len(truncated_code_ids)} tokens to fit model context."
+            )
+            code = truncated_code
+
+        # Create prompt with (possibly truncated) code
         prompt = self.prompt_template.format(code=code, language=language)
 
-        # Tokenize
-        inputs = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=1024
+        # Tokenize the final prompt
+        inputs = self.tokenizer(prompt, return_tensors="pt")
+        input_len = inputs.input_ids.shape[1]
+
+        # Double-check length (should be within limit)
+        if input_len >= max_model_len:
+            # Emergency truncation: cut a few more tokens from code
+            excess = input_len - max_model_len + 1
+            # Re-truncate code further by removing from the end
+            code_ids = self.tokenizer.encode(code, add_special_tokens=False)
+            if len(code_ids) > excess:
+                truncated_code_ids = code_ids[:-excess]
+                code = self.tokenizer.decode(
+                    truncated_code_ids, skip_special_tokens=True
+                )
+                prompt = self.prompt_template.format(code=code, language=language)
+                inputs = self.tokenizer(prompt, return_tensors="pt")
+                input_len = inputs.input_ids.shape[1]
+            if input_len >= max_model_len:
+                return {
+                    "severity": "error",
+                    "line_number": 0,
+                    "category": "system_error",
+                    "suggestion": "Input code too long for model context window even after truncation",
+                    "explanation": f"Input length ({input_len}) still exceeds model max ({max_model_len}).",
+                    "code_example": None,
+                }
+
+        # Calculate effective max_new_tokens
+        effective_max_new_tokens = min(
+            max_new_tokens, max(0, max_model_len - input_len)
         )
+
+        # Move inputs to device
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # Generate
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=effective_max_new_tokens,
                 temperature=0.2,
                 top_p=0.95,
-                do_sample=False,  # Use greedy decoding for consistency
+                do_sample=False,
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
             )
@@ -161,28 +229,8 @@ Review:"""
         response_start = full_output.find("Review:") + len("Review:")
         response_text = full_output[response_start:].strip()
 
-        # Parse JSON from response
-        try:
-            # Find JSON object in response
-            json_start = response_text.find("{")
-            json_end = response_text.rfind("}") + 1
-            if json_start != -1 and json_end != -1:
-                json_str = response_text[json_start:json_end]
-                review = json.loads(json_str)
-            else:
-                # Fallback: try to parse entire response
-                review = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-            logger.error(f"Response text: {response_text}")
-            review = {
-                "severity": "unknown",
-                "line_number": 0,
-                "category": "parsing_error",
-                "suggestion": "Model output could not be parsed as JSON",
-                "explanation": response_text[:500],
-                "code_example": None,
-            }
+        # Parse JSON from response using robust extractor
+        review = self._extract_json(response_text)
 
         return review
 
@@ -208,27 +256,62 @@ Review:"""
         return prompt
 
     def _extract_json(self, response: str) -> Dict[str, Any]:
-        """Extract JSON from model response."""
-        try:
-            # Find JSON object in response
-            json_start = response.find("{")
-            json_end = response.rfind("}") + 1
-            if json_start != -1 and json_end != -1:
-                json_str = response[json_start:json_end]
-                return json.loads(json_str)
-            else:
-                # Fallback: try to parse entire response
-                return json.loads(response)
-        except json.JSONDecodeError:
+        """Extract the first balanced JSON object from the response."""
+        # Find the first opening brace
+        start = response.find("{")
+        if start == -1:
             return {
                 "severity": "unknown",
                 "line_number": 0,
                 "category": "parsing_error",
-                "suggestion": "Failed to parse response",
+                "suggestion": "Model output could not be parsed as JSON",
                 "explanation": response[:500],
                 "code_example": None,
-                "_parse_error": True,
             }
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(response)):
+            char = response[i]
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"' and not escape:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    json_str = response[start : i + 1]
+                    try:
+                        return json.loads(json_str)
+                    except json.JSONDecodeError:
+                        # Break to fallback
+                        break
+        # Fallback to simple first-last brace method
+        json_start = response.find("{")
+        json_end = response.rfind("}") + 1
+        if json_start != -1 and json_end != -1:
+            json_str = response[json_start:json_end]
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+        return {
+            "severity": "unknown",
+            "line_number": 0,
+            "category": "parsing_error",
+            "suggestion": "Model output could not be parsed as JSON",
+            "explanation": response[:500],
+            "code_example": None,
+        }
 
     def review_code(self, code: str, language: str = "python") -> Dict[str, Any]:
         """Review code and return structured output."""
