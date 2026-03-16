@@ -20,25 +20,40 @@ logger = logging.getLogger(__name__)
 class CodeReviewInference:
     """Inference wrapper for code review model."""
 
-    def __init__(self, model_path: str = "models/checkpoints/phi2-code-review"):
+    def __init__(
+        self,
+        model_path: Optional[str] = "models/checkpoints/phi2-code-review",
+        base_model_name: Optional[str] = None,
+        device: Optional[str] = None,
+    ):
         self.model_path = model_path
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.base_model_name = base_model_name
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = None
         self.model = None
         self.prompt_template = self._load_prompt_template()
 
     def _load_prompt_template(self) -> str:
         """Load prompt template from config or default."""
-        config_path = os.path.join(self.model_path, "config.yaml")
-        if os.path.exists(config_path):
+        # First, try the config in the model_path (for checkpoint-specific)
+        if self.model_path is not None:
+            config_path = os.path.join(self.model_path, "config.yaml")
+            if os.path.exists(config_path):
+                import yaml
+
+                with open(config_path, "r") as f:
+                    config = yaml.safe_load(f)
+                return config["dataset"]["prompt_template"]
+        # Fallback to the project's config.yaml (in same dir as this file)
+        project_config = os.path.join(os.path.dirname(__file__), "config.yaml")
+        if os.path.exists(project_config):
             import yaml
 
-            with open(config_path, "r") as f:
+            with open(project_config, "r") as f:
                 config = yaml.safe_load(f)
             return config["dataset"]["prompt_template"]
-        else:
-            # Default template
-            return """Analyze this code and provide a code review:
+        # Fallback to a minimal default (should not normally happen)
+        return """Analyze this code and provide a code review:
 [Language: {language}]
 
 Code:
@@ -65,7 +80,9 @@ Review:"""
         if os.path.exists(config_path):
             # LoRA model - need base model
             peft_config = PeftConfig.from_pretrained(self.model_path)
-            base_model_path = peft_config.base_model_name_or_path
+            base_model_path = (
+                self.base_model_name or peft_config.base_model_name_or_path
+            )
 
             logger.info(f"Loading base model: {base_model_path}")
             tokenizer = AutoTokenizer.from_pretrained(base_model_path)
@@ -176,6 +193,79 @@ Review:"""
             review = self.generate_review(code, language)
             reviews.append(review)
         return reviews
+
+    def create_prompt(
+        self, code: str, filename: Optional[str] = None, language: str = "python"
+    ) -> str:
+        """Create prompt for code review."""
+        # Include filename in the code if provided
+        if filename:
+            code = f"Code file: {filename}\n{code}"
+        # Use simple replacement to avoid conflicts with braces in JSON
+        prompt = self.prompt_template.replace("{code}", code).replace(
+            "{language}", language
+        )
+        return prompt
+
+    def _extract_json(self, response: str) -> Dict[str, Any]:
+        """Extract JSON from model response."""
+        try:
+            # Find JSON object in response
+            json_start = response.find("{")
+            json_end = response.rfind("}") + 1
+            if json_start != -1 and json_end != -1:
+                json_str = response[json_start:json_end]
+                return json.loads(json_str)
+            else:
+                # Fallback: try to parse entire response
+                return json.loads(response)
+        except json.JSONDecodeError:
+            return {
+                "severity": "unknown",
+                "line_number": 0,
+                "category": "parsing_error",
+                "suggestion": "Failed to parse response",
+                "explanation": response[:500],
+                "code_example": None,
+                "_parse_error": True,
+            }
+
+    def review_code(self, code: str, language: str = "python") -> Dict[str, Any]:
+        """Review code and return structured output."""
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model not loaded. Call load() first.")
+
+        response = self.generate_review(code, language)
+        # Add raw response for debugging
+        response["_raw_response"] = response.get("explanation", "")
+        return response
+
+    def batch_review(self, files: list) -> list:
+        """Review multiple files."""
+        results = []
+        for file_info in files:
+            code = file_info.get("code", "")
+            filename = file_info.get("filename", "unknown")
+            language = file_info.get("language", "python")
+
+            try:
+                review = self.review_code(code, language)
+                review["filename"] = filename
+                review["_success"] = True
+            except Exception as e:
+                review = {
+                    "filename": filename,
+                    "severity": "error",
+                    "line_number": 0,
+                    "category": "system_error",
+                    "suggestion": str(e),
+                    "explanation": f"Failed to review file: {e}",
+                    "code_example": None,
+                    "_success": False,
+                    "_error": str(e),
+                }
+            results.append(review)
+        return results
 
 
 if __name__ == "__main__":
