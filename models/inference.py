@@ -325,6 +325,7 @@ Review:"""
             "suggestion": "Model output could not be parsed as JSON",
             "explanation": response[:500],
             "code_example": None,
+            "_parse_error": True,
         }
 
     def review_code(self, code: str, language: str = "python") -> Dict[str, Any]:
