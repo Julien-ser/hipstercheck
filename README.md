@@ -145,6 +145,93 @@ The API will be available at `http://localhost:8000` with:
 3. View your repositories in the dashboard
 4. (Future) Select a repo to analyze code
 
+## Deploying to Vercel
+
+### Backend Deployment
+
+The FastAPI backend is configured for serverless deployment on Vercel using Mangum.
+
+1. **Install Vercel CLI** (optional but recommended):
+   ```bash
+   npm i -g vercel
+   ```
+
+2. **Login to Vercel**:
+   ```bash
+   vercel login
+   ```
+
+3. **Link your project**:
+   ```bash
+   vercel link
+   ```
+   Follow the prompts to link your project. This uses the existing `vercel.json` configuration.
+
+4. **Set environment variables in Vercel dashboard**:
+
+   After linking, go to your project settings in the Vercel dashboard (https://vercel.com/[your-org]/hipstercheck/settings/environment-variables) and add all variables from `.env.example`:
+
+   - `GITHUB_CLIENT_ID` - From your GitHub OAuth app
+   - `GITHUB_CLIENT_SECRET` - From your GitHub OAuth app
+   - `APP_URL` - Your Vercel frontend URL (e.g., `https://hipstercheck.vercel.app`)
+   - `HF_TOKEN` - Your Hugging Face token (for model inference)
+   - `STRIPE_SECRET_KEY` - Your Stripe secret key
+   - `STRIPE_PUBLIC_KEY` - Your Stripe publishable key
+   - `STRIPE_WEBHOOK_SECRET` - Your Stripe webhook signing secret
+   - `STRIPE_PRICE_ID` - Your Stripe price ID for Pro subscription
+   - `REDIS_URL` (optional) - Redis connection URL for persistent caching
+   - `CACHE_TTL_HOURS` (optional) - Cache TTL in hours, default 24
+   - `RATE_LIMIT_BUFFER` (optional) - GitHub API rate limit buffer, default 10
+
+   Alternatively, set them via CLI:
+   ```bash
+   vercel env add GITHUB_CLIENT_ID production
+   vercel env add HF_TOKEN production
+   # ... repeat for each variable
+   ```
+
+5. **Deploy the backend**:
+   ```bash
+   vercel --prod
+   ```
+
+   The API will be available at:
+   - `https://your-project.vercel.app/api/health` (health check)
+   - `https://your-project.vercel.app/api/analyze` (analysis endpoint)
+   - `https://your-project.vercel.app/api/stripe/*` (Stripe endpoints)
+
+6. **Enable Vercel Analytics**:
+
+   In the Vercel dashboard, enable **Analytics** for your project to monitor:
+   - Request count and duration
+   - Error rates
+   - Function invocations
+
+   Vercel automatically collects backend metrics. View them under the "Analytics" tab.
+
+### Updating Frontend Configuration
+
+After deploying the backend, update your `.env` file for the Streamlit frontend:
+
+```bash
+API_URL=https://your-project.vercel.app
+```
+
+### Monitoring & Logs
+
+- **Real-time logs**: `vercel logs your-project.vercel.app --follow`
+- **Performance metrics**: Vercel dashboard → Analytics
+- **Alerts**: Set up notifications in Vercel dashboard
+
+### Notes
+
+- Backend uses `mangum` for ASGI-to-serverless adapter
+- Cold start: ~1-2 seconds for first request after inactivity
+- Redis recommended for production caching; falls back to in-memory if unavailable
+- Ensure Hugging Face token has `read` permissions for model access
+
+---
+
 ## Project Structure
 
 ```
