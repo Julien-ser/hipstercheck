@@ -32,6 +32,7 @@ class CodeReviewInference:
         config_path = os.path.join(self.model_path, "config.yaml")
         if os.path.exists(config_path):
             import yaml
+
             with open(config_path, "r") as f:
                 config = yaml.safe_load(f)
             return config["dataset"]["prompt_template"]
@@ -70,7 +71,9 @@ Review:"""
             tokenizer = AutoTokenizer.from_pretrained(base_model_path)
             model = AutoModelForCausalLM.from_pretrained(
                 base_model_path,
-                torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                torch_dtype=torch.bfloat16
+                if torch.cuda.is_available()
+                else torch.float32,
                 device_map="auto" if torch.cuda.is_available() else None,
                 trust_remote_code=True,
             )
@@ -80,7 +83,9 @@ Review:"""
             tokenizer = AutoTokenizer.from_pretrained(self.model_path)
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
-                torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                torch_dtype=torch.bfloat16
+                if torch.cuda.is_available()
+                else torch.float32,
                 device_map="auto" if torch.cuda.is_available() else None,
                 trust_remote_code=True,
             )
@@ -96,7 +101,9 @@ Review:"""
         logger.info("Model loaded successfully")
         return self
 
-    def generate_review(self, code: str, language: str = "python", max_new_tokens: int = 512) -> Dict[str, Any]:
+    def generate_review(
+        self, code: str, language: str = "python", max_new_tokens: int = 512
+    ) -> Dict[str, Any]:
         """
         Generate code review for given code snippet.
 
@@ -115,7 +122,9 @@ Review:"""
         prompt = self.prompt_template.format(code=code, language=language)
 
         # Tokenize
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+        inputs = self.tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=1024
+        )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # Generate
@@ -174,7 +183,9 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Test code review inference")
-    parser.add_argument("--model_path", type=str, default="models/checkpoints/phi2-code-review")
+    parser.add_argument(
+        "--model_path", type=str, default="models/checkpoints/phi2-code-review"
+    )
     parser.add_argument("--code_file", type=str, help="Path to code file to review")
     args = parser.parse_args()
 
@@ -193,3 +204,16 @@ def compute(x, y):
 
     review = inference.generate_review(code)
     print(json.dumps(review, indent=2))
+
+
+# Alias for compatibility with tests
+CodeReviewModel = CodeReviewInference
+
+
+def get_model(model_path: str = None, device: str = None):
+    """Factory function to get a code review model."""
+    if model_path is None:
+        model_path = "models/checkpoints/phi2-code-review"
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return CodeReviewInference(model_path=model_path, device=device)

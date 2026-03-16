@@ -135,6 +135,7 @@ class CodeReviewTrainer:
             return tokenized
 
         from datasets import Dataset
+
         dataset = Dataset.from_list(formatted_data)
         tokenized_dataset = dataset.map(
             tokenize_function,
@@ -157,15 +158,19 @@ class CodeReviewTrainer:
         training_args = TrainingArguments(
             output_dir=self.output_dir,
             num_train_epochs=self.config["training"]["num_train_epochs"],
-            per_device_train_batch_size=self.config["training"]["per_device_train_batch_size"],
-            gradient_accumulation_steps=self.config["training"]["gradient_accumulation_steps"],
+            per_device_train_batch_size=self.config["training"][
+                "per_device_train_batch_size"
+            ],
+            gradient_accumulation_steps=self.config["training"][
+                "gradient_accumulation_steps"
+            ],
             learning_rate=self.config["training"]["learning_rate"],
             warmup_steps=self.config["training"]["warmup_steps"],
             logging_dir=self.config["output"]["logging_dir"],
             logging_steps=self.config["training"]["logging_steps"],
             save_steps=self.config["training"]["save_steps"],
             eval_steps=self.config["training"]["eval_steps"],
-            evaluation_strategy="steps",
+            eval_strategy="steps",
             save_strategy="steps",
             load_best_model_at_end=True,
             fp16=self.config["training"]["fp16"] and torch.cuda.is_available(),
@@ -189,7 +194,6 @@ class CodeReviewTrainer:
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             data_collator=data_collator,
-            tokenizer=tokenizer,
         )
 
         # Train
@@ -218,7 +222,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Fine-tune Phi-2 for code review")
-    parser.add_argument("--config", type=str, default="models/config.yaml", help="Path to config file")
+    parser.add_argument(
+        "--config", type=str, default="models/config.yaml", help="Path to config file"
+    )
     args = parser.parse_args()
 
     # Check CUDA availability
