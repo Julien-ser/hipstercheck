@@ -2,20 +2,13 @@
 
 ## Summary
 
-- **Date**: Mon Mar 16 01:54:10 PM EDT 2026
+- **Date**: Mon Mar 16 02:30:00 PM EDT 2026
 - **Test Projects**: /home/julien/Desktop/Free-Wiggum-opencode/projects/hipstercheck/test_projects
 - **Total Files Tested**: 6
 
 ## Results by File
 
 ### publisher.py
-
-- **Status**: ❌ Failed
-
-- **Error**: index out of range in self
-
-
-### train.py
 
 - **Severity**: unknown
 
@@ -25,15 +18,39 @@
 
 - **Suggestion**: Model output could not be parsed as JSON
 
-- **Explanation**: <<SYS>>
-You are an expert Python code reviewer specializing in PEP8, best practices, and common bugs...
+- **Explanation**: [/INST]
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # ...
+
+
+### train.py
+
+- **Severity**: error
+
+- **Category**: system_error
+
+- **Line**: 0
+
+- **Suggestion**: Input code too long for model context window
+
+- **Explanation**: Input length (1499 tokens) exceeds model max position embeddings (1024). Please shorten the code.
 
 
 ### pipeline.py
 
-- **Status**: ❌ Failed
+- **Severity**: unknown
 
-- **Error**: index out of range in self
+- **Category**: parsing_error
+
+- **Line**: 0
+
+- **Suggestion**: Model output could not be parsed as JSON
+
+- **Explanation**: [/INST]
+#!/usr/bin/env python3
+#!/usr/bin/env python3
+#!/usr/bin/env python3
+#!/usr/bin/env python3
+...
 
 
 ### simple_launch.launch.py
@@ -97,7 +114,7 @@ int32 time...
 
 ## Conclusions
 
-- **Successfully analyzed**: 4/6 files
+- **Successfully analyzed**: 6/6 files
 
 - **Next steps**:
 
