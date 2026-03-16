@@ -32,9 +32,9 @@ training:
   test_file: "dataset/split_test.jsonl"
 
   # Training settings
-  num_train_epochs: 1
-  per_device_train_batch_size: 4
-  per_device_eval_batch_size: 4
+  num_train_epochs: 3
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
   gradient_accumulation_steps: 1
   optim: "adamw_torch"
   learning_rate: 2.0e-4
@@ -58,9 +58,9 @@ training:
   output_dir: "./checkpoints/phi2-code-review"
   overwrite_output_dir: true
 
-  # Evaluation strategy
-  evaluation_strategy: "steps"
-  save_strategy: "steps"
+   # Evaluation strategy
+   eval_strategy: "steps"
+   save_strategy: "steps"
   load_best_model_at_end: true
   metric_for_best_model: "eval_loss"
   greater_is_better: false
@@ -81,11 +81,11 @@ inference:
 
 # Hardware
 # Set to false for CPU training, true for GPU
-use_gpu: true
+use_gpu: false
 
 # For CPU training, set these:
-# fp16: false
-# gradient_checkpointing: false
+fp16: false
+gradient_checkpointing: false
 
 # Data collator settings
 data_collator:
