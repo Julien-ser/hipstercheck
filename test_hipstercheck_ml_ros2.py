@@ -120,17 +120,16 @@ def test_inference_setup():
             return None
         else:
             model = CodeReviewInference(model_path=model_path)
+            print("  Loading model...")
+            model.load()
+            print("✅ Model loaded successfully")
+            return model
     except Exception as e:
         print(f"❌ Failed to load model: {e}")
         import traceback
 
         traceback.print_exc()
         return None
-
-    print("  Loading model...")
-    model.load()
-    print("✅ Model loaded successfully")
-    return model
 
 
 @pytest.mark.skip(reason="Requires model download which times out in CI")
