@@ -145,7 +145,7 @@ The API will be available at `http://localhost:8000` with:
 3. View your repositories in the dashboard
 4. (Future) Select a repo to analyze code
 
-## Deploying to Vercel
+## Backend Deployment
 
 ### Backend Deployment
 
@@ -231,6 +231,125 @@ API_URL=https://your-project.vercel.app
 - Ensure Hugging Face token has `read` permissions for model access
 
 ---
+
+## Frontend Deployment
+
+The Streamlit frontend can be deployed either on Streamlit Community Cloud (recommended) or on Vercel using Docker.
+
+### Prerequisites
+
+- GitHub repository with the hipstercheck code
+- Backend already deployed on Vercel (or another accessible URL)
+- Environment variables configured (see `.env.example`)
+
+### Option 1: Streamlit Community Cloud (Recommended)
+
+Streamlit Community Cloud provides free hosting for Streamlit apps with minimal configuration.
+
+1. **Push your code to GitHub** (if not already):
+   ```bash
+   git add .
+   git commit -m "Prepare for deployment"
+   git push origin main
+   ```
+
+2. **Go to [Streamlit Cloud](https://streamlit.io/cloud) and sign up** (you can use your GitHub account).
+
+3. **Create a new app**:
+   - Click **"New app"**.
+   - Choose your GitHub repository and branch (e.g., `main`).
+   - Set **Main file path** to `streamlit_app.py`.
+   - Leave the other settings as default.
+
+4. **Configure environment variables**:
+   In the app's settings (gear icon), go to **Secrets** and add each variable from your `.env.example`:
+   - `GITHUB_CLIENT_ID`
+   - `GITHUB_CLIENT_SECRET`
+   - `APP_URL` (set to your Streamlit Cloud URL, e.g., `https://your-app.streamlit.app`)
+   - `API_URL` (set to your deployed backend URL, e.g., `https://hipstercheck.vercel.app`)
+   - `HF_TOKEN` (if using local model inference)
+   - `STRIPE_SECRET_KEY`, `STRIPE_PUBLIC_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` (if enabling payments)
+   - Optional: `REDIS_URL`, `CACHE_TTL_HOURS`, `RATE_LIMIT_BUFFER`
+
+   Alternatively, you can set these in the **Settings → Secrets** section.
+
+5. **Deploy**:
+   Click **"Deploy"**. Streamlit Cloud will build and deploy your app automatically. The deployment usually takes a few minutes.
+
+6. **Verify**:
+   Once deployed, open your app URL and test the functionality. Ensure the OAuth callback works and that code analysis calls reach the backend.
+
+### Option 2: Vercel with Docker (Advanced)
+
+If you prefer to host the frontend on Vercel, you can containerize the Streamlit app using Docker.
+
+1. **Create a `Dockerfile`** in the project root (if not already present):
+   ```dockerfile
+   FROM python:3.11-slim
+
+   WORKDIR /app
+
+   RUN apt-get update && apt-get install -y --no-install-recommends \
+       build-essential \
+       && rm -rf /var/lib/apt/lists/*
+
+   COPY requirements.txt .
+   RUN pip install --no-cache-dir -r requirements.txt
+
+   COPY . .
+
+   ENV PYTHONUNBUFFERED=1
+   EXPOSE 8501
+
+   CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port 8000 & streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0"]
+   ```
+
+   This Dockerfile runs both the FastAPI backend (on port 8000 internally) and the Streamlit frontend (on the Vercel-provided `$PORT`). The frontend will communicate with the backend via `http://localhost:8000`.
+
+2. **Update `vercel.json`** to use Docker:
+   ```json
+   {
+     "version": 2,
+     "builds": [
+       {
+         "src": "Dockerfile",
+         "use": "@vercel/docker"
+       }
+     ],
+     "routes": [
+       {
+         "src": "/(.*)",
+         "dest": "/"
+       }
+     ]
+   }
+   ```
+
+3. **Set environment variables in Vercel**:
+   When you create a new Vercel project (or update the existing one), add all environment variables from `.env.example` in the Vercel dashboard → Project Settings → Environment Variables. Ensure `APP_URL` matches your Vercel frontend URL and `API_URL` is set to `http://localhost:8000` (since the backend is in the same container).
+
+4. **Deploy**:
+   ```bash
+   vercel --prod
+   ```
+
+5. **Notes**:
+   - The combined container starts both the backend and frontend. FastAPI runs in the background and is only accessible internally; all external traffic goes to Streamlit.
+   - If you already have a separate backend deployment, you can modify `API_URL` to point to that external URL instead.
+   - Vercel's Docker builds may take longer than serverless builds.
+
+### Adding a Custom Domain
+
+Both Streamlit Cloud and Vercel support custom domains:
+
+- **Streamlit Cloud**: In your app settings, go to **Settings → Custom domain**, add your domain, and follow the DNS verification instructions.
+- **Vercel**: In the Vercel dashboard, go to your project's **Domains** settings and add your domain. Vercel automatically provisions an SSL certificate.
+
+After adding a custom domain, update the `APP_URL` environment variable to match the new domain.
+
+---
+
+**Important**: The frontend requires the backend to be running and accessible. Ensure your backend deployment is healthy before connecting the frontend.
 
 ## Project Structure
 
