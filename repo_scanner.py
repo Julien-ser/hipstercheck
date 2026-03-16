@@ -210,7 +210,13 @@ class RepoScanner:
         rate_info = self.check_rate_limit()
         if "error" not in rate_info:
             remaining = rate_info["remaining"]
-            if remaining <= buffer:
+            try:
+                remaining_int = int(remaining)
+            except (TypeError, ValueError):
+                remaining_int = float(
+                    "inf"
+                )  # If we can't parse, assume plenty remaining
+            if remaining_int <= buffer:
                 reset_time = rate_info.get("reset_epoch", time.time() + 3600)
                 wait_seconds = max(1, reset_time - time.time() + 5)  # Add 5s buffer
                 if wait_seconds > 0:

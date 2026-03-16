@@ -128,7 +128,7 @@ class TestBatchReview:
 
 def test_prompt_templates_exist():
     """Test that all prompt template files exist."""
-    base_path = Path(__file__).parent.parent / "models" / "prompts"
+    base_path = Path(__file__).parent.parent / "prompts"
     assert (base_path / "python.txt").exists()
     assert (base_path / "ros2.txt").exists()
     assert (base_path / "ml.txt").exists()
@@ -136,7 +136,7 @@ def test_prompt_templates_exist():
 
 def test_config_yaml_exists():
     """Test that config file exists."""
-    config_path = Path(__file__).parent.parent / "models" / "config.yaml"
+    config_path = Path(__file__).parent.parent / "config.yaml"
     assert config_path.exists()
 
 
