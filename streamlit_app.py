@@ -72,7 +72,9 @@ if "analysis_error" not in st.session_state:
     st.session_state.analysis_error = None
 
 
-def fetch_file_content_from_github(github_token: str, repo_full_name: str, file_path: str) -> str:
+def fetch_file_content_from_github(
+    github_token: str, repo_full_name: str, file_path: str
+) -> str:
     """
     Fetch file content from GitHub using the API.
 
@@ -106,47 +108,48 @@ def analyze_files_with_api(code_snippets, api_url):
         api_url: FastAPI backend URL
 
     Returns:
-        List of analysis results or None if error occurred
+        Tuple of (list of analysis results, cache_hits count) or (None, 0) if error occurred
     """
     try:
         # Send batch request
         response = requests.post(
             f"{api_url.rstrip('/')}/analyze/batch",
             json={"code_snippets": code_snippets},
-            timeout=30  # Allow up to 30s for batch processing
+            timeout=30,  # Allow up to 30s for batch processing
         )
 
         if response.status_code == 200:
             result = response.json()
             if "results" in result:
-                return result["results"]
+                cache_hits = result.get("cache_hits", 0)
+                return result["results"], cache_hits
             else:
                 st.error(f"Unexpected response format: {result}")
-                return None
+                return None, 0
         else:
             st.error(f"API request failed: {response.status_code} - {response.text}")
-            return None
+            return None, 0
 
     except requests.exceptions.RequestException as e:
         st.error(f"Failed to connect to API backend: {str(e)}")
         st.info(f"Make sure the FastAPI backend is running at {api_url}")
-        return None
+        return None, 0
     except Exception as e:
         st.error(f"Analysis failed: {str(e)}")
-        return None
+        return None, 0
 
 
 def display_analysis_results(analysis_results):
     """Display analysis results in expanders with color-coded severity."""
     st.markdown("---")
     st.header("📋 Code Review Results")
-    
+
     # Summary metrics
     total_reviews = len(analysis_results)
     high_count = sum(1 for r in analysis_results if r.get("severity") == "high")
     medium_count = sum(1 for r in analysis_results if r.get("severity") == "medium")
     low_count = sum(1 for r in analysis_results if r.get("severity") in ["low", "info"])
-    
+
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Reviews", total_reviews)
@@ -156,9 +159,9 @@ def display_analysis_results(analysis_results):
         st.metric("🔵 Medium", medium_count)
     with col4:
         st.metric("🟢 Low/Info", low_count)
-    
+
     st.markdown("---")
-    
+
     # Display individual results in expanders
     for idx, review in enumerate(analysis_results):
         file_path = review.get("file_path", "Unknown file")
@@ -168,7 +171,7 @@ def display_analysis_results(analysis_results):
         explanation = review.get("explanation", "No explanation")
         line_number = review.get("line_number", 0)
         code_example = review.get("code_example")
-        
+
         # Determine color based on severity
         if severity == "high":
             label_color = "🟡"  # Yellow for high
@@ -182,9 +185,11 @@ def display_analysis_results(analysis_results):
         else:
             label_color = "⚪"
             expander_color = "gray"
-        
+
         # Create expander with file name and severity
-        expander_title = f"{label_color} {file_path} (Line {line_number}) - {severity.upper()}"
+        expander_title = (
+            f"{label_color} {file_path} (Line {line_number}) - {severity.upper()}"
+        )
         with st.expander(expander_title, expanded=False):
             st.markdown(f"**Category:** `{category}`")
             st.markdown(f"**Suggestion:** {suggestion}")
@@ -192,8 +197,12 @@ def display_analysis_results(analysis_results):
             st.markdown(f"> {explanation}")
             if code_example:
                 st.markdown("**Code Example:**")
-                st.code(code_example, language=file_path.split(".")[-1] if "." in file_path else "python")
+                st.code(
+                    code_example,
+                    language=file_path.split(".")[-1] if "." in file_path else "python",
+                )
             st.caption(f"File: `{file_path}`")
+
 
 # Handle OAuth callback
 query_params = st.query_params
@@ -222,42 +231,152 @@ if "code" in query_params and "state" in query_params:
             st.error(f"❌ Authentication error: {str(e)}")
             st.stop()
 
-# Main app logic
-if st.session_state.token and st.session_state.github_user:
-    user = st.session_state.github_user
-    repos = st.session_state.repos
+    # Main app logic
+    if st.session_state.token and st.session_state.github_user:
+        user = st.session_state.github_user
+        repos = st.session_state.repos
 
-    # Header with user info
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        st.image(user.avatar_url, width=100)
-    with col2:
-        st.title(f"👋 Welcome, {user.login}!")
-        st.markdown(f"**Name:** {user.name or 'N/A'}  \n**Bio:** {user.bio or 'N/A'}")
-    st.markdown("---")
-    
-    # Rate limit and cache status
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("🔄 Refresh Rate Limit", type="secondary", use_container_width=True):
-            st.rerun()
-    with col2:
-        if st.session_state.repo_scanner and st.session_state.repo_scanner.use_redis:
-            st.success("✅ Redis Cache")
+        # Header with user info
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            st.image(user.avatar_url, width=100)
+        with col2:
+            st.title(f"👋 Welcome, {user.login}!")
+            st.markdown(
+                f"**Name:** {user.name or 'N/A'}  \n**Bio:** {user.bio or 'N/A'}"
+            )
+        st.markdown("---")
+
+        # Cache and rate limit status
+        if st.session_state.repo_scanner:
+            scan_stats = st.session_state.repo_scanner.get_cache_stats()
         else:
-            st.info("⚠️ Memory Cache")
-    with col3:
-        if st.button("🗑️ Clear Cache", type="secondary", use_container_width=True):
+            scan_stats = {"memory_cache_size": 0, "backend": "none"}
+
+        # Fetch review cache stats
+        review_stats = None
+        try:
+            cache_resp = requests.get(
+                f"{API_URL.rstrip('/')}/cache/stats", timeout=2
+            )
+            if cache_resp.status_code == 200:
+                review_stats = cache_resp.json()
+        except:
+            pass
+
+        # Display stats in columns
+        col1, col2, col3, col4 = st.columns([1, 2, 2, 2])
+        with col1:
+            if st.button("🔄 Refresh", type="secondary", use_container_width=True):
+                st.rerun()
+        with col2:
             if st.session_state.repo_scanner:
-                st.session_state.repo_scanner._cache.clear()
+                backend = scan_stats.get("backend", "unknown")
+                total = scan_stats.get("total_cached", 0)
+                if backend == "redis+memory":
+                    st.success(f"✅ Scan Cache: {total} entries (Redis+Memory)")
+                elif backend == "memory":
+                    st.info(f"⚠️ Scan Cache: {total} entries (Memory)")
+                else:
+                    st.warning("⚠️ Scan Cache: Offline")
+        with col3:
+            if review_stats:
+                hit_rate = review_stats.get("hit_rate_pct", 0)
+                backend = review_stats.get("backend", "unknown")
+                st.success(f"✅ Review Cache: {hit_rate}% hits ({backend})")
+            else:
+                st.warning("⚠️ Review Cache: Offline")
+        with col4:
+            if st.button("🗑️ Clear All Cache", type="secondary", use_container_width=True):
+                # Clear scan cache
+                if st.session_state.repo_scanner:
+                    st.session_state.repo_scanner._cache.clear()
+                    try:
+                        if (
+                            st.session_state.repo_scanner.use_redis
+                            and st.session_state.repo_scanner.redis_client
+                        ):
+                            st.session_state.repo_scanner.redis_client.flushdb()
+                    except:
+                        pass
+                # Clear review cache
                 try:
-                    if st.session_state.repo_scanner.use_redis and st.session_state.repo_scanner.redis_client:
-                        st.session_state.repo_scanner.redis_client.flushdb()
+                    requests.post(f"{API_URL.rstrip('/')}/cache/clear", timeout=2)
                 except:
                     pass
-            st.success("Cache cleared!")
-            st.rerun()
-     
+                st.success("All caches cleared!")
+                st.rerun()
+
+        # Detailed cache statistics in expander
+        with st.expander("📊 Detailed Cache Statistics", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Scan Cache**")
+                if st.session_state.repo_scanner:
+                    st.write(f"- Backend: {scan_stats.get('backend', 'N/A')}")
+                    st.write(f"- Total cached repos: {scan_stats.get('total_cached', 0)}")
+                    st.write(f"- Memory entries: {scan_stats.get('memory_cache_size', 0)}")
+                    if scan_stats.get('redis_cache_size') is not None:
+                        st.write(f"- Redis entries: {scan_stats.get('redis_cache_size', 0)}")
+                else:
+                    st.write("- Not available")
+            with col2:
+                st.markdown("**Review Cache**")
+                if review_stats:
+                    st.write(f"- Backend: {review_stats.get('backend', 'N/A')}")
+                    st.write(f"- Total requests: {review_stats.get('total_requests', 0)}")
+                    st.write(f"- Hits: {review_stats.get('hits', 0)}")
+                    st.write(f"- Misses: {review_stats.get('misses', 0)}")
+                    st.write(f"- Hit rate: {review_stats.get('hit_rate_pct', 0)}%")
+                    st.write(f"- Memory entries: {review_stats.get('memory_cache_size', 0)}")
+                else:
+                    st.write("- Not available")
+        with col2:
+            if (
+                st.session_state.repo_scanner
+                and st.session_state.repo_scanner.use_redis
+            ):
+                st.success("✅ Redis Scan Cache")
+            else:
+                st.info("⚠️ Memory Scan Cache")
+        with col3:
+            # Show review cache status if available
+            try:
+                cache_resp = requests.get(
+                    f"{API_URL.rstrip('/')}/cache/stats", timeout=2
+                )
+                if cache_resp.status_code == 200:
+                    cache_data = cache_resp.json()
+                    hit_rate = cache_data.get("hit_rate_pct", 0)
+                    backend = cache_data.get("backend", "unknown")
+                    st.success(f"✅ Review Cache: {hit_rate}% hits ({backend})")
+                else:
+                    st.warning("⚠️ Review Cache: N/A")
+            except:
+                st.warning("⚠️ Review Cache: Offline")
+        with col4:
+            if st.button(
+                "🗑️ Clear All Cache", type="secondary", use_container_width=True
+            ):
+                # Clear scan cache
+                if st.session_state.repo_scanner:
+                    st.session_state.repo_scanner._cache.clear()
+                    try:
+                        if (
+                            st.session_state.repo_scanner.use_redis
+                            and st.session_state.repo_scanner.redis_client
+                        ):
+                            st.session_state.repo_scanner.redis_client.flushdb()
+                    except:
+                        pass
+                # Clear review cache
+                try:
+                    requests.post(f"{API_URL.rstrip('/')}/cache/clear", timeout=2)
+                except:
+                    pass
+                st.success("All caches cleared!")
+                st.rerun()
+
     # Display GitHub API rate limit
     if st.session_state.repo_scanner:
         rate_info = st.session_state.repo_scanner.check_rate_limit()
@@ -267,14 +386,21 @@ if st.session_state.token and st.session_state.github_user:
             pct = (remaining / limit * 100) if limit > 0 else 0
 
             if pct < 20:
-                st.error(f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
+                st.error(
+                    f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)"
+                )
             elif pct < 50:
-                st.warning(f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
+                st.warning(
+                    f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)"
+                )
             else:
-                st.info(f"✅ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
+                st.info(
+                    f"✅ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)"
+                )
 
             if rate_info.get("reset_time"):
                 from datetime import datetime
+
                 reset_dt = datetime.fromisoformat(rate_info["reset_time"])
                 st.caption(f"Resets at: {reset_dt.strftime('%Y-%m-%d %H:%M:%S')}")
         else:
@@ -365,21 +491,28 @@ if st.session_state.token and st.session_state.github_user:
                 key="repo_select",
             )
 
-            if selected_repo:
-                st.session_state.selected_repo = selected_repo
+                if selected_repo:
+                    st.session_state.selected_repo = selected_repo
 
-                col_scan1, col_scan2 = st.columns([2, 1])
-                with col_scan1:
-                    scan_button = st.button(
-                        "🔍 Scan Repository", type="primary", use_container_width=True
-                    )
-                with col_scan2:
-                    if st.button("🔄 Clear Scan", use_container_width=True):
-                        st.session_state.scan_result = None
-                        st.session_state.selected_files = []
-                        st.session_state.analysis_results = None
-                        st.session_state.analysis_error = None
-                        st.rerun()
+                    col_scan1, col_scan2, col_scan3 = st.columns([2, 1, 1])
+                    with col_scan1:
+                        scan_button = st.button(
+                            "🔍 Scan Repository", type="primary", use_container_width=True
+                        )
+                    with col_scan2:
+                        if st.button("🔄 Re-Scan", use_container_width=True, type="secondary"):
+                            # Force fresh scan by invalidating cache first
+                            if st.session_state.repo_scanner:
+                                st.session_state.repo_scanner.invalidate_cache(selected_repo)
+                                st.session_state.scan_result = None
+                            st.rerun()
+                    with col_scan3:
+                        if st.button("🗑️ Clear Scan", use_container_width=True):
+                            st.session_state.scan_result = None
+                            st.session_state.selected_files = []
+                            st.session_state.analysis_results = None
+                            st.session_state.analysis_error = None
+                            st.rerun()
 
                 if scan_button or st.session_state.scan_result:
                     # Show progress during scan
@@ -532,15 +665,23 @@ if st.session_state.token and st.session_state.github_user:
                                     type="primary",
                                     use_container_width=True,
                                 ):
-                                    with st.spinner("Fetching file contents from GitHub..."):
+                                    with st.spinner(
+                                        "Fetching file contents from GitHub..."
+                                    ):
                                         # Fetch code content for each selected file
                                         code_snippets = []
-                                        github_token = st.session_state.token["access_token"]
+                                        github_token = st.session_state.token[
+                                            "access_token"
+                                        ]
                                         selected_repo = st.session_state.selected_repo
 
-                                        for file_info in st.session_state.selected_files:
+                                        for (
+                                            file_info
+                                        ) in st.session_state.selected_files:
                                             file_path = file_info["path"]
-                                            file_language = file_info.get("language", "Python")
+                                            file_language = file_info.get(
+                                                "language", "Python"
+                                            )
 
                                             # Fetch file content from GitHub
                                             content = fetch_file_content_from_github(
@@ -548,19 +689,27 @@ if st.session_state.token and st.session_state.github_user:
                                             )
 
                                             if content is not None:
-                                                code_snippets.append({
-                                                    "code": content,
-                                                    "language": file_language,
-                                                    "filename": file_path
-                                                })
+                                                code_snippets.append(
+                                                    {
+                                                        "code": content,
+                                                        "language": file_language,
+                                                        "filename": file_path,
+                                                    }
+                                                )
                                             else:
-                                                st.warning(f"⚠️ Could not fetch content for {file_path}")
+                                                st.warning(
+                                                    f"⚠️ Could not fetch content for {file_path}"
+                                                )
 
                                         if not code_snippets:
-                                            st.error("❌ No file content could be fetched. Please try again.")
+                                            st.error(
+                                                "❌ No file content could be fetched. Please try again."
+                                            )
                                             st.stop()
 
-                                        st.info(f"📦 Prepared {len(code_snippets)} files for analysis")
+                                        st.info(
+                                            f"📦 Prepared {len(code_snippets)} files for analysis"
+                                        )
 
                                     with st.spinner("Analyzing files with AI..."):
                                         # Call FastAPI backend with actual code content
@@ -578,16 +727,16 @@ if st.session_state.token and st.session_state.github_user:
                                                 # Add file information from our code_snippets
                                                 if idx < len(code_snippets):
                                                     snippet = code_snippets[idx]
-                                                    review["file_path"] = snippet["filename"]
+                                                    review["file_path"] = snippet[
+                                                        "filename"
+                                                    ]
 
                                                 enriched_results.append(review)
 
-                                            st.session_state.analysis_results = enriched_results
-    st.session_state.analysis_error = None
-if "demo_analysis_results" not in st.session_state:
-    st.session_state.demo_analysis_results = None
-if "demo_analysis_error" not in st.session_state:
-    st.session_state.demo_analysis_error = None
+                                            st.session_state.analysis_results = (
+                                                enriched_results
+                                            )
+                                            st.session_state.analysis_error = None
                                             st.success(
                                                 f"✅ Analysis complete! Found {len(enriched_results)} reviews."
                                             )
@@ -602,7 +751,9 @@ if "demo_analysis_error" not in st.session_state:
                                     st.header("📋 Code Review Results")
 
                                     # Summary metrics
-                                    total_reviews = len(st.session_state.analysis_results)
+                                    total_reviews = len(
+                                        st.session_state.analysis_results
+                                    )
                                     high_count = sum(
                                         1
                                         for r in st.session_state.analysis_results
@@ -623,7 +774,9 @@ if "demo_analysis_error" not in st.session_state:
                                     with col1:
                                         st.metric("Total Reviews", total_reviews)
                                     with col2:
-                                         st.metric("🟡 High", high_count, delta_color="inverse")
+                                        st.metric(
+                                            "🟡 High", high_count, delta_color="inverse"
+                                        )
                                     with col3:
                                         st.metric("🔵 Medium", medium_count)
                                     with col4:
@@ -632,18 +785,26 @@ if "demo_analysis_error" not in st.session_state:
                                     st.markdown("---")
 
                                     # Display individual results in expanders
-                                    for idx, review in enumerate(st.session_state.analysis_results):
-                                        file_path = review.get("file_path", "Unknown file")
+                                    for idx, review in enumerate(
+                                        st.session_state.analysis_results
+                                    ):
+                                        file_path = review.get(
+                                            "file_path", "Unknown file"
+                                        )
                                         severity = review.get("severity", "unknown")
                                         category = review.get("category", "unknown")
-                                        suggestion = review.get("suggestion", "No suggestion")
-                                        explanation = review.get("explanation", "No explanation")
+                                        suggestion = review.get(
+                                            "suggestion", "No suggestion"
+                                        )
+                                        explanation = review.get(
+                                            "explanation", "No explanation"
+                                        )
                                         line_number = review.get("line_number", 0)
                                         code_example = review.get("code_example")
 
                                         # Determine color based on severity
                                         if severity == "high":
-                                             label_color = "🟡"
+                                            label_color = "🟡"
                                             expander_color = "red"
                                         elif severity == "medium":
                                             label_color = "🔵"
@@ -657,18 +818,27 @@ if "demo_analysis_error" not in st.session_state:
 
                                         # Create expander with file name and severity
                                         expander_title = f"{label_color} {file_path} (Line {line_number}) - {severity.upper()}"
-                                        with st.expander(expander_title, expanded=False):
+                                        with st.expander(
+                                            expander_title, expanded=False
+                                        ):
                                             st.markdown(f"**Category:** `{category}`")
                                             st.markdown(f"**Suggestion:** {suggestion}")
                                             st.markdown("**Explanation:**")
                                             st.markdown(f"> {explanation}")
                                             if code_example:
                                                 st.markdown("**Code Example:**")
-                                                st.code(code_example, language=file_path.split(".")[-1] if "." in file_path else "python")
+                                                st.code(
+                                                    code_example,
+                                                    language=file_path.split(".")[-1]
+                                                    if "." in file_path
+                                                    else "python",
+                                                )
                                             st.caption(f"File: `{file_path}`")
 
                                 elif st.session_state.analysis_error:
-                                    st.error("❌ Analysis failed. Please try again or check the backend connection.")
+                                    st.error(
+                                        "❌ Analysis failed. Please try again or check the backend connection."
+                                    )
                                 else:
                                     st.caption(
                                         "Select files by checking the boxes above"
@@ -724,20 +894,41 @@ else:
     2. Select language if pasting
     3. Click **Analyze** to see AI-powered feedback
     """)
-    
-    demo_method = st.radio("Input method", ["Upload File", "Paste Code"], horizontal=True, key="demo_method")
+
+    demo_method = st.radio(
+        "Input method",
+        ["Upload File", "Paste Code"],
+        horizontal=True,
+        key="demo_method",
+    )
     demo_snippets = []
-    
+
     if demo_method == "Upload File":
         demo_uploaded = st.file_uploader(
             "Upload a code file",
-            type=["py", "js", "ts", "java", "c", "cpp", "yaml", "txt", "ipynb", "launch", "msg"],
+            type=[
+                "py",
+                "js",
+                "ts",
+                "java",
+                "c",
+                "cpp",
+                "yaml",
+                "txt",
+                "ipynb",
+                "launch",
+                "msg",
+            ],
             accept_multiple_files=False,
-            key="demo_uploader"
+            key="demo_uploader",
         )
         if demo_uploaded:
             content = demo_uploaded.getvalue().decode("utf-8")
-            ext = demo_uploaded.name.split(".")[-1].lower() if "." in demo_uploaded.name else ""
+            ext = (
+                demo_uploaded.name.split(".")[-1].lower()
+                if "." in demo_uploaded.name
+                else ""
+            )
             # Simple language mapping
             lang_map = {
                 "py": "python",
@@ -753,30 +944,42 @@ else:
                 "ipynb": "python",
                 "launch": "ros2",
                 "msg": "ros2",
-                "txt": "text"
+                "txt": "text",
             }
             language = lang_map.get(ext, "text")
-            demo_snippets.append({
-                "code": content,
-                "language": language,
-                "filename": demo_uploaded.name
-            })
+            demo_snippets.append(
+                {"code": content, "language": language, "filename": demo_uploaded.name}
+            )
             st.info(f"Loaded: {demo_uploaded.name}")
     else:
         demo_language = st.selectbox(
             "Language",
-            ["python", "javascript", "typescript", "java", "c", "cpp", "yaml", "ros2", "text"],
-            key="demo_language"
+            [
+                "python",
+                "javascript",
+                "typescript",
+                "java",
+                "c",
+                "cpp",
+                "yaml",
+                "ros2",
+                "text",
+            ],
+            key="demo_language",
         )
         demo_code = st.text_area("Paste your code", height=300, key="demo_code")
         if demo_code.strip():
-            demo_snippets.append({
-                "code": demo_code,
-                "language": demo_language,
-                "filename": "pasted_code"
-            })
-    
-    if demo_snippets and st.button("🚀 Analyze Demo", type="primary", key="demo_analyze"):
+            demo_snippets.append(
+                {
+                    "code": demo_code,
+                    "language": demo_language,
+                    "filename": "pasted_code",
+                }
+            )
+
+    if demo_snippets and st.button(
+        "🚀 Analyze Demo", type="primary", key="demo_analyze"
+    ):
         with st.spinner("Analyzing..."):
             results = analyze_files_with_api(demo_snippets, API_URL)
             if results:
@@ -786,13 +989,15 @@ else:
             else:
                 st.session_state.demo_analysis_error = True
         st.rerun()
-    
+
     if st.session_state.get("demo_analysis_results"):
         st.markdown("---")
         display_analysis_results(st.session_state.demo_analysis_results)
     elif st.session_state.get("demo_analysis_error"):
-        st.error("❌ Analysis failed. Please try again or check the backend connection.")
-    
+        st.error(
+            "❌ Analysis failed. Please try again or check the backend connection."
+        )
+
     # Separator before sign-in
     st.markdown("---")
     st.header("🔐 Sign in with GitHub")

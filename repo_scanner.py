@@ -152,6 +152,42 @@ class RepoScanner:
         # Also store in memory as fallback
         self._cache[cache_key] = data_to_store
 
+    def invalidate_cache(self, repo_full_name: str, branch: str = None):
+        """Invalidate cached scan results for a repository."""
+        cache_key = self._generate_cache_key(repo_full_name, branch)
+
+        # Remove from Redis if available
+        if self.use_redis and self.redis_client:
+            try:
+                self.redis_client.delete(f"hipstercheck:{cache_key}")
+            except Exception as e:
+                print(f"Redis delete error: {e}")
+
+        # Remove from memory cache
+        if cache_key in self._cache:
+            del self._cache[cache_key]
+
+    def get_cache_stats(self) -> Dict:
+        """Get scan cache statistics."""
+        memory_count = len(self._cache)
+
+        redis_count = 0
+        if self.use_redis and self.redis_client:
+            try:
+                keys = self.redis_client.keys("hipstercheck:*")
+                redis_count = len(keys)
+            except Exception as e:
+                print(f"Redis keys error: {e}")
+
+        total = memory_count + redis_count if self.use_redis else memory_count
+
+        return {
+            "memory_cache_size": memory_count,
+            "redis_cache_size": redis_count if self.use_redis else 0,
+            "backend": "redis+memory" if self.use_redis else "memory",
+            "total_cached": total,
+        }
+
     def check_rate_limit(self) -> Dict:
         """Check current GitHub API rate limit status."""
         try:
@@ -183,21 +219,25 @@ class RepoScanner:
                     )
                     time.sleep(wait_seconds)
 
-    def scan_repository(self, repo_full_name: str, progress_callback=None) -> Dict:
+    def scan_repository(
+        self, repo_full_name: str, progress_callback=None, force: bool = False
+    ) -> Dict:
         """
         Scan a repository and extract file tree with metadata.
 
         Args:
             repo_full_name: Repository name (e.g., 'owner/repo')
             progress_callback: Optional callback(local_path, current, total) for progress
+            force: If True, bypass cache and force fresh scan
 
         Returns:
             Dictionary with repository info and file tree
         """
-        # Check cache first
-        cached = self.get_cached_scan(repo_full_name)
-        if cached:
-            return cached
+        # Check cache first (unless forcing)
+        if not force:
+            cached = self.get_cached_scan(repo_full_name)
+            if cached:
+                return cached
 
         # Check rate limit before proceeding
         self.wait_for_rate_limit(buffer=int(os.getenv("RATE_LIMIT_BUFFER", "10")))

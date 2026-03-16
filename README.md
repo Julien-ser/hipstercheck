@@ -243,6 +243,55 @@ These templates ensure consistent, high-quality reviews across all supported lan
 - [ ] Deploy Streamlit frontend on Vercel
 - [ ] Validate via Reddit/Indie Hackers
 
+## Caching
+
+hipstercheck implements **two-level caching** to optimize performance and reduce costs:
+
+### 1. Repository Scan Cache
+Scanning a repository clones it and extracts the file tree, which can be slow and rate-limited by GitHub. Results are cached for 24 hours with Redis (preferred) or in-memory fallback.
+
+**Cache Key**: Repository name + branch (hashed)
+
+**Cache Invalidation**: 
+- Automatic: Entries expire after 24 hours
+- Manual: Use "Re-Scan" button for fresh scan
+- Global: "Clear All Cache" button clears everything
+
+**Configuration**:
+```bash
+# Add to .env (optional)
+REDIS_URL=redis://localhost:6379/0
+CACHE_TTL_HOURS=24
+```
+
+If Redis is unavailable, the app falls back to in-memory caching (lost on restart).
+
+### 2. Code Review Cache
+Individual code file analyses are cached to avoid unnecessary model inference. This significantly reduces compute costs and improves response time.
+
+**Cache Key**: SHA256 hash of (code content + language)
+
+**Statistics**: Real-time hit/miss rates displayed in the UI. Typical hit rates >60% for repeated analyses.
+
+**Configuration**:
+```bash
+CACHE_TTL_HOURS=24  # Review cache TTL (default: 24 hours)
+```
+
+### Cache Performance Tips
+- ✅ **High cache hit rates** when scanning the same repo multiple times
+- ✅ **Fast re-scans** - bypass GitHub clone, instant results from cache
+- ✅ **Reduced model calls** - saves GPU/compute costs
+- ✅ **Offline capability** - memory cache works without Redis
+
+### Monitoring
+The dashboard displays:
+- **Scan Cache**: Backend type (Redis/Memory), total cached repos
+- **Review Cache**: Hit rate, total requests, backend
+- **Expandable details** in the "📊 Detailed Cache Statistics" section
+
+Use "Clear All Cache" to reset statistics and force fresh analyses.
+
 ## Architecture
 
 ### Tech Stack
