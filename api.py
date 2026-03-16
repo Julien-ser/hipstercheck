@@ -32,6 +32,7 @@ from database import (
     UsageTrack,
 )
 from models.inference import CodeReviewInference
+from fastapi import Depends
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -438,6 +439,356 @@ async def analyze_batch(request: BatchAnalysisRequest):
         "results": results,
         "errors": errors,
     }
+
+
+# ========== Stripe Subscription Endpoints ==========
+
+
+@app.post("/stripe/create-checkout-session")
+async def create_checkout_session(
+    request: CreateCheckoutSessionRequest, db: Session = Depends(get_db)
+):
+    """
+    Create a Stripe Checkout session for Pro subscription.
+
+    Requires: github_user_id, github_username, email, success_url, cancel_url
+    Returns: checkout_url for redirecting user to Stripe
+    """
+    try:
+        # Get or create user
+        user = get_or_create_user(
+            db,
+            github_id=request.github_user_id,
+            github_username=request.github_username,
+            email=request.email,
+        )
+
+        # Get or create Stripe customer
+        subscription = get_user_subscription(db, user.id)
+
+        if not subscription:
+            subscription = Subscription(
+                user_id=user.id, plan="free", status="incomplete"
+            )
+            db.add(subscription)
+            db.commit()
+            db.refresh(subscription)
+
+        customer_id = subscription.stripe_customer_id
+
+        # Create Stripe customer if doesn't exist
+        if not customer_id:
+            try:
+                customer = stripe.Customer.create(
+                    email=request.email,
+                    metadata={
+                        "github_user_id": str(request.github_user_id),
+                        "github_username": request.github_username,
+                    },
+                )
+                customer_id = customer.id
+                subscription.stripe_customer_id = customer_id
+                db.commit()
+            except stripe.error.StripeError as e:
+                logger.error(f"Failed to create Stripe customer: {e}")
+                raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
+
+        # Create price for Pro plan ($10/month)
+        # In production, you'd create this in Stripe dashboard and use price ID from env
+        price_id = os.getenv(
+            "STRIPE_PRICE_ID", "price_H5ggYqfDq8fXjU"
+        )  # Fallback for testing
+
+        try:
+            checkout_session = stripe.checkout.Session.create(
+                customer=customer_id,
+                payment_method_types=["card"],
+                line_items=[
+                    {
+                        "price": price_id,
+                        "quantity": 1,
+                    },
+                ],
+                mode="subscription",
+                success_url=request.success_url + "?session_id={CHECKOUT_SESSION_ID}",
+                cancel_url=request.cancel_url,
+                metadata={
+                    "user_id": str(user.id),
+                    "github_user_id": str(request.github_user_id),
+                },
+            )
+        except stripe.error.StripeError as e:
+            logger.error(f"Failed to create checkout session: {e}")
+            raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
+
+        return CheckoutSessionResponse(
+            session_id=checkout_session.id, checkout_url=checkout_session.url
+        )
+
+    except Exception as e:
+        logger.error(f"Create checkout session failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create checkout session: {str(e)}"
+        )
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """
+    Handle Stripe webhook events.
+
+    Processes: checkout.session.completed, customer.subscription.updated, customer.subscription.deleted
+    """
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    if not sig_header:
+        raise HTTPException(status_code=400, detail="Missing Stripe signature")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {str(e)}")
+    except stripe.error.SignatureVerificationError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid signature: {str(e)}")
+
+    # Handle the event
+    event_type = event["type"]
+    event_data = event["data"]["object"]
+
+    logger.info(f"Received Stripe webhook: {event_type}")
+
+    try:
+        if event_type == "checkout.session.completed":
+            session = event_data
+            user_id = int(session.get("metadata", {}).get("user_id"))
+            subscription_id = session.get("subscription")
+
+            if user_id and subscription_id:
+                # Fetch subscription details from Stripe
+                stripe_sub = stripe.Subscription.retrieve(subscription_id)
+                update_subscription_from_stripe(
+                    db,
+                    user_id=user_id,
+                    stripe_subscription_id=stripe_sub.id,
+                    status=stripe_sub.status,
+                    plan="pro",
+                    current_period_start=datetime.fromtimestamp(
+                        stripe_sub.current_period_start
+                    ),
+                    current_period_end=datetime.fromtimestamp(
+                        stripe_sub.current_period_end
+                    ),
+                    cancel_at_period_end=stripe_sub.cancel_at_period_end,
+                )
+                logger.info(f"Updated subscription for user {user_id}: Pro active")
+
+        elif event_type == "customer.subscription.updated":
+            subscription = event_data
+            customer_id = subscription.get("customer")
+
+            if customer_id:
+                # Find user by Stripe customer ID
+                user_sub = (
+                    db.query(Subscription)
+                    .filter_by(stripe_customer_id=customer_id)
+                    .first()
+                )
+                if user_sub:
+                    update_subscription_from_stripe(
+                        db,
+                        user_id=user_sub.user_id,
+                        stripe_subscription_id=subscription.id,
+                        status=subscription.status,
+                        plan="pro"
+                        if subscription.plan == "price_H5ggYqfDq8fXjU"
+                        else subscription.plan,
+                        current_period_start=datetime.fromtimestamp(
+                            subscription.current_period_start
+                        ),
+                        current_period_end=datetime.fromtimestamp(
+                            subscription.current_period_end
+                        ),
+                        cancel_at_period_end=subscription.cancel_at_period_end,
+                    )
+                    logger.info(
+                        f"Updated subscription for user {user_sub.user_id}: {subscription.status}"
+                    )
+
+        elif event_type == "customer.subscription.deleted":
+            subscription = event_data
+            customer_id = subscription.get("customer")
+
+            if customer_id:
+                user_sub = (
+                    db.query(Subscription)
+                    .filter_by(stripe_customer_id=customer_id)
+                    .first()
+                )
+                if user_sub:
+                    update_subscription_from_stripe(
+                        db,
+                        user_id=user_sub.user_id,
+                        status="canceled",
+                    )
+                    logger.info(
+                        f"Marked subscription canceled for user {user_sub.user_id}"
+                    )
+
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}", exc_info=True)
+        # Don't return error to Stripe - they'll retry
+        return {"status": "error", "message": str(e)}
+
+    return {"status": "success"}
+
+
+@app.get("/subscription/status", response_model=SubscriptionStatusResponse)
+async def get_subscription_status(github_user_id: int, db: Session = Depends(get_db)):
+    """
+    Get subscription status for a user by GitHub user ID.
+
+    Query params: github_user_id
+    Returns: subscription status, plan, active flags, etc.
+    """
+    user = db.query(User).filter_by(github_id=github_user_id).first()
+    if not user:
+        # No user yet - treat as free tier
+        return SubscriptionStatusResponse(
+            plan="free",
+            status="inactive",
+            is_active=False,
+            stripe_subscription_id=None,
+            current_period_end=None,
+            days_remaining=0,
+        )
+
+    subscription = get_user_subscription(db, user.id)
+    if not subscription:
+        return SubscriptionStatusResponse(
+            plan="free",
+            status="inactive",
+            is_active=False,
+            stripe_subscription_id=None,
+            current_period_end=None,
+            days_remaining=0,
+        )
+
+    days_remaining = subscription.days_until_expiration
+
+    return SubscriptionStatusResponse(
+        plan=subscription.plan,
+        status=subscription.status,
+        is_active=subscription.is_active,
+        stripe_subscription_id=subscription.stripe_subscription_id,
+        current_period_end=subscription.current_period_end,
+        days_remaining=days_remaining,
+    )
+
+
+@app.get("/usage/check", response_model=UsageCheckResponse)
+async def check_usage(github_user_id: int, db: Session = Depends(get_db)):
+    """
+    Check if user can scan a repository based on subscription and usage limits.
+
+    Query params: github_user_id
+    Returns: can_scan, message, remaining_scans, subscription_plan, weekly_usage
+    """
+    user = db.query(User).filter_by(github_id=github_user_id).first()
+    if not user:
+        # No user yet - free tier
+        weekly_count = get_weekly_scan_count(db, user.id) if user else 0
+        return UsageCheckResponse(
+            can_scan=True,  # Allow first scan
+            message="Free tier: 1 scan allowed per week",
+            remaining_scans=1,
+            subscription_plan="free",
+            weekly_usage=weekly_count,
+        )
+
+    can_scan, message, remaining = can_scan_repo(db, user.id)
+    subscription = get_user_subscription(db, user.id)
+    plan = subscription.plan if subscription else "free"
+
+    weekly_usage = get_weekly_scan_count(db, user.id)
+
+    return UsageCheckResponse(
+        can_scan=can_scan,
+        message=message,
+        remaining_scans=remaining,
+        subscription_plan=plan,
+        weekly_usage=weekly_usage,
+    )
+
+
+class TrackScanRequest(BaseModel):
+    """Request model for tracking a repository scan."""
+
+    github_user_id: int = Field(..., description="GitHub user ID")
+    repo_full_name: str = Field(..., description="Repository full name")
+
+
+@app.post("/usage/track")
+async def track_scan(request: TrackScanRequest, db: Session = Depends(get_db)):
+    """
+    Track a repository scan for usage limits.
+
+    This endpoint should be called after a successful repository scan.
+    """
+    user = db.query(User).filter_by(github_id=request.github_user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if this repo was already scanned recently (within 24h) to avoid double-counting
+    recent_scan = (
+        db.query(UsageTrack)
+        .filter(
+            UsageTrack.user_id == user.id,
+            UsageTrack.repo_full_name == request.repo_full_name,
+            UsageTrack.scanned_at >= datetime.utcnow() - timedelta(hours=24),
+        )
+        .first()
+    )
+
+    if recent_scan:
+        # Already scanned recently, don't count again
+        return {
+            "status": "skipped",
+            "message": "Already counted recent scan",
+            "user_id": user.id,
+        }
+
+    # Track new scan
+    usage = track_repo_scan(db, user.id, request.repo_full_name)
+
+    # Get updated usage info
+    can_scan, message, remaining = can_scan_repo(db, user.id)
+
+    return {
+        "status": "tracked",
+        "message": "Scan tracked successfully",
+        "user_id": user.id,
+        "repo": request.repo_full_name,
+        "scanned_at": usage.scanned_at.isoformat(),
+        "remaining_scans": remaining,
+        "can_scan_next": can_scan,
+    }
+
+    can_scan, message, remaining = can_scan_repo(db, user.id)
+    subscription = get_user_subscription(db, user.id)
+    plan = subscription.plan if subscription else "free"
+
+    weekly_usage = get_weekly_scan_count(db, user.id)
+
+    return UsageCheckResponse(
+        can_scan=can_scan,
+        message=message,
+        remaining_scans=remaining,
+        subscription_plan=plan,
+        weekly_usage=weekly_usage,
+    )
 
 
 if __name__ == "__main__":

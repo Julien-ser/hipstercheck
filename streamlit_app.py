@@ -21,6 +21,7 @@ GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 APP_URL = os.getenv("APP_URL", "http://localhost:8501")
 API_URL = os.getenv("API_URL", "http://localhost:8000")
+STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLIC_KEY", "")
 
 # Validate credentials
 if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
@@ -63,13 +64,17 @@ if "repo_scanner" not in st.session_state:
 if "scan_result" not in st.session_state:
     st.session_state.scan_result = None
 if "selected_files" not in st.session_state:
-    st.session_state.selected_files = []
+    st.session_state.selected_files = None
 if "selected_repo" not in st.session_state:
     st.session_state.selected_repo = None
 if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = None
 if "analysis_error" not in st.session_state:
     st.session_state.analysis_error = None
+if "subscription_status" not in st.session_state:
+    st.session_state.subscription_status = None
+if "usage_check" not in st.session_state:
+    st.session_state.usage_check = None
 
 
 def fetch_file_content_from_github(
@@ -137,6 +142,42 @@ def analyze_files_with_api(code_snippets, api_url):
     except Exception as e:
         st.error(f"Analysis failed: {str(e)}")
         return None, 0
+
+
+def get_subscription_status(github_user_id: int):
+    """Fetch subscription status for user."""
+    try:
+        response = requests.get(
+            f"{API_URL.rstrip('/')}/subscription/status",
+            params={"github_user_id": github_user_id},
+            timeout=5,
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Failed to get subscription status: {response.status_code}")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching subscription status: {e}")
+        return None
+
+
+def check_usage_permission(github_user_id: int):
+    """Check if user can scan a repository."""
+    try:
+        response = requests.get(
+            f"{API_URL.rstrip('/')}/usage/check",
+            params={"github_user_id": github_user_id},
+            timeout=5,
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Failed to check usage: {response.status_code}")
+            return None
+    except Exception as e:
+        logger.error(f"Error checking usage: {e}")
+        return None
 
 
 def display_analysis_results(analysis_results):
@@ -221,6 +262,17 @@ if "code" in query_params and "state" in query_params:
                 st.session_state.repos = list(user.get_repos())
                 # Initialize repo scanner
                 st.session_state.repo_scanner = RepoScanner(token["access_token"])
+
+                # Fetch subscription status and usage info
+                with st.spinner("Loading subscription info..."):
+                    sub_status = get_subscription_status(user.id)
+                    if sub_status:
+                        st.session_state.subscription_status = sub_status
+
+                    usage_info = check_usage_permission(user.id)
+                    if usage_info:
+                        st.session_state.usage_check = usage_info
+
                 # Clear query parameters and rerun
                 st.query_params.clear()
                 st.rerun()
@@ -236,6 +288,32 @@ if "code" in query_params and "state" in query_params:
         user = st.session_state.github_user
         repos = st.session_state.repos
 
+        # Bootstrap: fetch subscription/usage if not already loaded (e.g., page refresh)
+        if st.session_state.subscription_status is None:
+            sub_status = get_subscription_status(user.id)
+            if sub_status:
+                st.session_state.subscription_status = sub_status
+        if st.session_state.usage_check is None:
+            usage_info = check_usage_permission(user.id)
+            if usage_info:
+                st.session_state.usage_check = usage_info
+
+        # Check for checkout result in query params
+        query_params = st.query_params
+        if "checkout" in query_params:
+            if query_params["checkout"] == "success":
+                st.success("✅ Payment successful! Upgrading your subscription...")
+                # Refresh subscription status
+                sub_status = get_subscription_status(user.id)
+                if sub_status:
+                    st.session_state.subscription_status = sub_status
+                st.query_params.clear()
+                st.rerun()
+            elif query_params["checkout"] == "cancel":
+                st.warning("❎ Payment cancelled. You can upgrade anytime.")
+                st.query_params.clear()
+                st.rerun()
+
         # Header with user info
         col1, col2 = st.columns([1, 4])
         with col1:
@@ -245,6 +323,62 @@ if "code" in query_params and "state" in query_params:
             st.markdown(
                 f"**Name:** {user.name or 'N/A'}  \n**Bio:** {user.bio or 'N/A'}"
             )
+
+        # Display subscription status
+        if st.session_state.subscription_status:
+            sub = st.session_state.subscription_status
+            plan = sub.get("plan", "free")
+            is_active = sub.get("is_active", False)
+
+            if plan == "pro" and is_active:
+                days = sub.get("days_remaining", 0)
+                st.success(
+                    f"💎 **Pro Subscription Active** - {days} days remaining",
+                    icon="✅"
+                )
+            elif plan == "free":
+                usage = st.session_state.usage_check or {}
+                remaining = usage.get("remaining_scans", 0)
+                st.warning(
+                    f"🆓 **Free Tier** - {remaining} scan(s) remaining this week",
+                    icon="⚠️"
+                )
+                # Show upgrade button
+                if STRIPE_PUBLIC_KEY:
+                    upgrade_col1, upgrade_col2 = st.columns([3, 1])
+                    with upgrade_col1:
+                        st.info("Upgrade to Pro for unlimited scans ($10/month)")
+                    with upgrade_col2:
+                        if st.button("🚀 Upgrade to Pro", type="primary", use_container_width=True):
+                            # Create checkout session
+                            try:
+                                checkout_resp = requests.post(
+                                    f"{API_URL.rstrip('/')}/stripe/create-checkout-session",
+                                    json={
+                                        "github_user_id": user.id,
+                                        "github_username": user.login,
+                                        "email": user.email or "",
+                                        "success_url": f"{APP_URL}?checkout=success",
+                                        "cancel_url": f"{APP_URL}?checkout=cancel",
+                                    },
+                                    timeout=10,
+                                )
+                                if checkout_resp.status_code == 200:
+                                    checkout_data = checkout_resp.json()
+                                    st.markdown(
+                                        f'<meta http-equiv="refresh" content="0; url={checkout_data["checkout_url"]}" />',
+                                        unsafe_allow_html=True,
+                                    )
+                                    st.success("Redirecting to Stripe Checkout...")
+                                else:
+                                    st.error("Failed to create checkout session. Please try again.")
+                            except Exception as e:
+                                st.error(f"Checkout error: {e}")
+                else:
+                    st.info("Stripe not configured. Contact admin to enable payments.")
+        else:
+            st.info("Subscription status unavailable")
+
         st.markdown("---")
 
         # Cache and rate limit status
@@ -471,6 +605,24 @@ if "code" in query_params and "state" in query_params:
 
         st.markdown("---")
         st.header("🔍 Repository Scanner")
+
+        # Show usage warning if on free tier with low remaining scans
+        if st.session_state.usage_check:
+            usage = st.session_state.usage_check
+            if usage.get("subscription_plan") == "free":
+                remaining = usage.get("remaining_scans", 0)
+                if remaining == 0:
+                    st.error(
+                        "🚫 **Free tier limit reached!** You've used your 1 scan this week. "
+                        "Upgrade to Pro for unlimited scans."
+                    )
+                    st.button("🚀 Upgrade to Pro", type="primary", use_container_width=True, disabled=not STRIPE_PUBLIC_KEY)
+                else:
+                    st.warning(
+                        f"⚠️ **Free tier:** {remaining} scan(s) remaining this week. "
+                        "Upgrade to Pro for unlimited scans!"
+                    )
+
         st.markdown("""
         Select a repository to scan and analyze files:
         1. Pick a repository from above
@@ -514,6 +666,33 @@ if "code" in query_params and "state" in query_params:
                             st.session_state.analysis_error = None
                             st.rerun()
 
+                if scan_button:
+                    # Check if user can scan first
+                    if not st.session_state.github_user:
+                        st.error("Please authenticate first")
+                        st.stop()
+
+                    user_id = st.session_state.github_user.id
+
+                    # Check usage permission
+                    usage_resp = check_usage_permission(user_id)
+                    if usage_resp and not usage_resp.get("can_scan", False):
+                        st.error(f"❌ {usage_resp.get('message', 'Cannot scan repository')}")
+                        st.info("Upgrade to Pro for unlimited scans!")
+                        st.stop()
+
+                    # Check subscription status again (stale data?)
+                    sub_resp = get_subscription_status(user_id)
+                    if sub_resp:
+                        st.session_state.subscription_status = sub_resp
+                        usage_resp = check_usage_permission(user_id)
+                        if usage_resp:
+                            st.session_state.usage_check = usage_resp
+
+                        if not usage_resp.get("can_scan", False):
+                            st.error(f"❌ {usage_resp.get('message', 'Cannot scan repository')}")
+                            st.stop()
+
                 if scan_button or st.session_state.scan_result:
                     # Show progress during scan
                     with st.spinner(f"Scanning {selected_repo}..."):
@@ -541,6 +720,29 @@ if "code" in query_params and "state" in query_params:
                                 )
                                 st.session_state.scan_result = scan_result
                                 progress_bar.empty()
+
+                                # Track this scan for usage limits (free tier)
+                                if st.session_state.github_user:
+                                    try:
+                                        track_resp = requests.post(
+                                            f"{API_URL.rstrip('/')}/usage/track",
+                                            json={
+                                                "github_user_id": st.session_state.github_user.id,
+                                                "repo_full_name": selected_repo,
+                                            },
+                                            timeout=5,
+                                        )
+                                        if track_resp.status_code == 200:
+                                            # Update usage check in session
+                                            usage_resp = check_usage_permission(user_id)
+                                            if usage_resp:
+                                                st.session_state.usage_check = usage_resp
+                                                # Also update subscription status to refresh any changes
+                                                sub_resp = get_subscription_status(user_id)
+                                                if sub_resp:
+                                                    st.session_state.subscription_status = sub_resp
+                                    except Exception as e:
+                                        logger.error(f"Failed to track usage: {e}")
 
                             # Display scan results
                             result = st.session_state.scan_result
