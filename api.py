@@ -33,6 +33,7 @@ from database import (
     UsageTrack,
     User,
     Subscription,
+    SessionLocal,
 )
 from models.inference import CodeReviewInference
 from fastapi import Depends
