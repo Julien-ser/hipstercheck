@@ -29,7 +29,10 @@ from database import (
     update_subscription_from_stripe,
     track_repo_scan,
     can_scan_repo,
+    get_weekly_scan_count,
     UsageTrack,
+    User,
+    Subscription,
 )
 from models.inference import CodeReviewInference
 from fastapi import Depends

@@ -27,6 +27,7 @@ from database import (
     get_user_subscription,
     can_scan_repo,
     get_weekly_scan_count,
+    get_db,
 )
 
 
@@ -70,37 +71,68 @@ def mock_stripe():
 
 @pytest.fixture
 def mock_db_session():
-    """Mock database session."""
-    with patch("api.get_db") as mock_get_db:
-        session = MagicMock()
+    """Mock database session using dependency override with per-model query mocks."""
+    from database import get_db, User, Subscription, UsageTrack
+    from api import app
 
-        # Mock user query
-        mock_user = User(
-            id=1, github_id=123, github_username="testuser", email="test@example.com"
-        )
-        session.query.return_value.filter_by.return_value.first.return_value = mock_user
+    # Create a mock session
+    session = MagicMock()
 
-        # Mock subscription query
-        mock_sub = Subscription(
-            id=1,
-            user_id=1,
-            stripe_customer_id="cus_test123",
-            stripe_subscription_id="sub_test123",
-            status="active",
-            plan="free",
-            current_period_end=datetime.utcnow() + timedelta(days=7),
-        )
+    # Create separate query mocks for each model
+    user_query = MagicMock()
+    sub_query = MagicMock()
+    usage_query = MagicMock()
 
-        # chain filter_by calls
-        def mock_filter_by(**kwargs):
-            if "user_id" in kwargs:
-                return MagicMock(first=lambda: mock_sub)
-            return MagicMock(first=lambda: None)
+    # Default values
+    mock_user = User(
+        id=1, github_id=123, github_username="testuser", email="test@example.com"
+    )
+    mock_sub = Subscription(
+        id=1,
+        user_id=1,
+        stripe_customer_id="cus_test123",
+        stripe_subscription_id="sub_test123",
+        status="active",
+        plan="free",
+        current_period_end=datetime.utcnow() + timedelta(days=7),
+    )
 
-        session.query.return_value.filter_by.side_effect = mock_filter_by
+    user_query.filter_by.return_value.first.return_value = mock_user
+    sub_query.filter_by.return_value.first.return_value = mock_sub
+    # For usage track: default no recent scan, count 0
+    usage_query.filter.return_value.first.return_value = None
+    usage_query.filter.return_value.count.return_value = 0
 
-        mock_get_db.return_value = session
-        yield session
+    def query_side_effect(model):
+        if model is User:
+            return user_query
+        elif model is Subscription:
+            return sub_query
+        elif model is UsageTrack:
+            return usage_query
+        else:
+            return MagicMock()
+
+    session.query.side_effect = query_side_effect
+
+    # Attach the query mocks for test customization
+    session.user_query = user_query
+    session.sub_query = sub_query
+    session.usage_query = usage_query
+
+    # Override the dependency
+    def override_get_db():
+        try:
+            yield session
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    yield session
+
+    # Cleanup
+    app.dependency_overrides.clear()
 
 
 class TestSubscriptionStatus:
@@ -115,15 +147,15 @@ class TestSubscriptionStatus:
         assert "status" in data
         assert "is_active" in data
 
-    def test_get_subscription_status_new_user(self):
+    def test_get_subscription_status_new_user(self, mock_db_session):
         """Test getting subscription status for non-existing user (treated as free)."""
-        with patch("api.get_or_create_user") as mock_create:
-            mock_create.return_value = None
-            response = client.get("/subscription/status?github_user_id=99999")
-            # Should still return a response (free tier)
-            assert response.status_code == 200
-            data = response.json()
-            assert data["plan"] == "free"
+        # Simulate user not found
+        mock_db_session.user_query.filter_by.return_value.first.return_value = None
+        response = client.get("/subscription/status?github_user_id=99999")
+        # Should still return a response (free tier)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["plan"] == "free"
 
 
 class TestUsageCheck:
@@ -133,9 +165,7 @@ class TestUsageCheck:
         """Test usage check for pro user (unlimited)."""
         # Mock subscription as pro
         mock_sub = Subscription(user_id=1, plan="pro", status="active")
-        mock_db_session.query.return_value.filter_by.return_value.first.return_value = (
-            mock_sub
-        )
+        mock_db_session.sub_query.filter_by.return_value.first.return_value = mock_sub
 
         response = client.get("/usage/check?github_user_id=123")
         assert response.status_code == 200
@@ -148,13 +178,15 @@ class TestUsageCheck:
         """Test usage check for free user with scans remaining."""
         # Mock subscription as free
         mock_sub = Subscription(user_id=1, plan="free", status="incomplete")
-        mock_db_session.query.return_value.filter_by.return_value.first.return_value = (
-            mock_sub
-        )
+        mock_db_session.sub_query.filter_by.return_value.first.return_value = mock_sub
 
         # Mock can_scan_repo to return True
         with patch("api.can_scan_repo") as mock_can_scan:
-            mock_can_scan.return_value = (True, "Free tier: 1 scan remaining", 1)
+            mock_can_scan.return_value = (
+                True,
+                "Free tier: 1 scan remaining",
+                1,
+            )
             response = client.get("/usage/check?github_user_id=123")
             assert response.status_code == 200
             data = response.json()
@@ -164,9 +196,7 @@ class TestUsageCheck:
     def test_check_usage_free_tier_limit_reached(self, mock_db_session):
         """Test usage check for free user when limit reached."""
         mock_sub = Subscription(user_id=1, plan="free", status="incomplete")
-        mock_db_session.query.return_value.filter_by.return_value.first.return_value = (
-            mock_sub
-        )
+        mock_db_session.sub_query.filter_by.return_value.first.return_value = mock_sub
 
         with patch("api.can_scan_repo") as mock_can_scan:
             mock_can_scan.return_value = (
@@ -233,10 +263,19 @@ class TestTrackScan:
             "github_user_id": 123,
             "repo_full_name": "owner/repo",
         }
-        response = client.post("/usage/track", json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "tracked"
+        # Mock track_repo_scan to return a UsageTrack with scanned_at
+        with patch("api.track_repo_scan") as mock_track:
+            mock_usage = UsageTrack(
+                id=1,
+                user_id=1,
+                repo_full_name="owner/repo",
+                scanned_at=datetime.utcnow(),
+            )
+            mock_track.return_value = mock_usage
+            response = client.post("/usage/track", json=payload)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "tracked"
         assert "scanned_at" in data
 
     def test_track_scan_duplicate(self, mock_db_session):
@@ -247,7 +286,7 @@ class TestTrackScan:
             repo_full_name="owner/repo",
             scanned_at=datetime.utcnow() - timedelta(hours=1),
         )
-        mock_db_session.query.return_value.filter.return_value.filter.return_value.first.return_value = recent
+        mock_db_session.usage_query.filter.return_value.first.return_value = recent
 
         payload = {
             "github_user_id": 123,

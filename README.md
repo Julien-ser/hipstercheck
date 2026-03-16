@@ -48,7 +48,35 @@ Before running the app, you need to create a GitHub OAuth App:
     *(Note: `APP_URL` must match the callback URL from step 2)*
     *(Note: `API_URL` points to the FastAPI backend - start it with `python api.py`)*
 
-### 2. Install Dependencies
+### 2. (Optional) Configure Stripe for Payments
+
+To enable paid subscriptions ($10/month Pro plan):
+
+1. Create a [Stripe account](https://stripe.com) (if you don't have one)
+2. Get your API keys from Stripe Dashboard → Developers → API keys:
+   - **Secret key** (starts with `sk_test_` or `sk_live_`)
+   - **Publishable key** (starts with `pk_test_` or `pk_live_`)
+3. Create a product and price in Stripe Dashboard → Products:
+   - Create product: "hipstercheck Pro"
+   - Add price: $10/month (recurring)
+   - Copy the **Price ID** (starts with `price_`)
+4. Set up a webhook endpoint in Stripe Dashboard → Developers → Webhooks:
+   - Endpoint URL: `https://your-app.com/api/stripe/webhook` (or `http://localhost:8000/stripe/webhook` for local)
+   - Select events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`
+   - Copy the **Webhook secret** (starts with `whsec_`)
+5. Add the following to your `.env`:
+
+```bash
+# Stripe API keys
+STRIPE_SECRET_KEY=sk_test_your_secret_key
+STRIPE_PUBLIC_KEY=pk_test_your_publishable_key
+STRIPE_WEBHOOK_SECRET=whsec_your_webhook_secret
+STRIPE_PRICE_ID=price_your_price_id
+```
+
+**Note**: For local testing, you can use Stripe test mode and test cards (e.g., `4242 4242 4242 4242`). The fallback price ID in the code is for demo purposes; you should create your own.
+
+### 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
@@ -151,7 +179,7 @@ hipstercheck/
 - [x] Collect code review dataset
 - [x] Select base LLM for fine-tuning
 - [x] **Fine-tune model on review generation** ✅ Pipeline implemented and validated. Training script (`models/train.py`) successfully loads Phi-2 with LoRA, prepares dataset, and executes training steps. Smoke test passes. Full training requires GPU for practical speed.
-- [x] Create prompt engineering templates
+- [x] Create prompt engineering templates for Python, ROS2, and ML frameworks
 
 ### Selected Model: Microsoft Phi-2
 
@@ -238,7 +266,7 @@ These templates ensure consistent, high-quality reviews across all supported lan
 - [ ] Set up Stripe subscription
 
 ### Phase 4: Testing, Deployment & Validation
-- [ ] Test with personal ROS2/ML projects
+- [x] **Test with personal ROS2/ML projects** ✅ Created comprehensive test suite with sample ROS2 nodes, PyTorch models, scikit-learn pipelines. Ran integration tests verifying issue detection (uninitialized variables, bare except, data leakage, missing train/test split, etc.). Test report generated. See `test_hipstercheck_ml_ros2.py` and `TEST_REPORT.md`.
 - [ ] Deploy backend on Vercel
 - [ ] Deploy Streamlit frontend on Vercel
 - [ ] Validate via Reddit/Indie Hackers
