@@ -313,7 +313,11 @@ Review:"""
             try:
                 return json.loads(json_str)
             except json.JSONDecodeError:
-                pass
+                if json5 is not None:
+                    try:
+                        return json5.loads(json_str)
+                    except Exception:
+                        pass
         return {
             "severity": "unknown",
             "line_number": 0,
