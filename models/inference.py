@@ -272,6 +272,7 @@ Review:"""
                 "suggestion": "Model output could not be parsed as JSON",
                 "explanation": response[:500],
                 "code_example": None,
+                "_parse_error": True,
             }
         depth = 0
         in_string = False
