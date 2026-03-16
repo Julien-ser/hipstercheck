@@ -158,17 +158,17 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      
+      - name: Deployment notification
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deploymentStatus = '${{ needs.deploy-production.result }}';
+            const statusEmoji = deploymentStatus === 'success' ? '✅' : '❌';
 
-    - name: Deployment notification
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const deploymentStatus = '${{ needs.deploy-production.result }}';
-          const statusEmoji = deploymentStatus === 'success' ? '✅' : '❌';
-
-          // Send notification to Slack, Discord, or other platforms
-          console.log(`Deployment ${deploymentStatus} ${statusEmoji}`);
-          console.log(`Environment: ${{ github.event.inputs.environment }}`);
-          console.log(`Version: ${{ github.event.inputs.version }}`);
+            // Send notification to Slack, Discord, or other platforms
+            console.log(`Deployment ${deploymentStatus} ${statusEmoji}`);
+            console.log(`Environment: ${{ github.event.inputs.environment }}`);
+            console.log(`Version: ${{ github.event.inputs.version }}`);
 
