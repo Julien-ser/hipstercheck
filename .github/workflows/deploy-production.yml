@@ -160,27 +160,27 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Deployment notification
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const deploymentStatus = '${{ needs.deploy-production.result }}';
-          const statusEmoji = deploymentStatus === 'success' ? '✅' : '❌';
-          
-          github.rest.issues.create({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            title: `${statusEmoji} Production Deployment ${{ github.event.inputs.version }}`,
-            body: `## Deployment Summary
+     - name: Deployment notification
+       uses: actions/github-script@v7
+       with:
+         script: |
+           const deploymentStatus = '${{ needs.deploy-production.result }}';
+           const statusEmoji = deploymentStatus === 'success' ? '✅' : '❌';
+           
+           github.rest.issues.create({
+             owner: context.repo.owner,
+             repo: context.repo.repo,
+             title: `${statusEmoji} Production Deployment ${{ github.event.inputs.version }}`,
+             body: `## Deployment Summary
 
-**Status**: ${deploymentStatus.toUpperCase()}
-**Version**: ${{ github.event.inputs.version }}
-**Environment**: ${{ github.event.inputs.environment }}
-**Deployed By**: ${{ github.actor }}
-**Timestamp**: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+            **Status**: ${deploymentStatus.toUpperCase()}
+            **Version**: ${{ github.event.inputs.version }}
+            **Environment**: ${{ github.event.inputs.environment }}
+            **Deployed By**: ${{ github.actor }}
+            **Timestamp**: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-[View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            `,
-            labels: ['deployment', '${{ github.event.inputs.environment }}']
-          })
-      continue-on-error: true
+            [View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+             `,
+             labels: ['deployment', '${{ github.event.inputs.environment }}']
+           })
+       continue-on-error: true
