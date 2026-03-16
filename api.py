@@ -2,10 +2,10 @@
 """
 hipstercheck - FastAPI Microservice for Code Review
 
-Provides REST API endpoints for AI-powered code review.
+Provides REST API endpoints for AI-powered code review and subscription management.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -13,15 +13,33 @@ import asyncio
 import time
 import logging
 import hashlib
+import stripe
 from contextlib import asynccontextmanager
 import pickle
 import os
 import redis
+from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
+
+from database import (
+    get_db,
+    init_db,
+    get_or_create_user,
+    get_user_subscription,
+    update_subscription_from_stripe,
+    track_repo_scan,
+    can_scan_repo,
+    UsageTrack,
+)
 from models.inference import CodeReviewInference
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Initialize Stripe
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 # Global model instance
 model: Optional[CodeReviewInference] = None
@@ -134,11 +152,14 @@ class ReviewCache:
 # Global review cache instance
 review_cache: Optional[ReviewCache] = None
 
+# Global database session (will be initialized in lifespan)
+db: Optional[Session] = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
-    global model, model_loaded, review_cache
+    global model, model_loaded, review_cache, db
     # Startup
     try:
         logger.info("Loading code review model...")
@@ -156,6 +177,11 @@ async def lifespan(app: FastAPI):
     # Initialize review cache
     review_cache = ReviewCache(ttl_hours=int(os.getenv("CACHE_TTL_HOURS", "24")))
 
+    # Initialize database
+    init_db()
+    db = SessionLocal()
+    logger.info("✅ Database initialized")
+
     # Set start time for health checks
     app.state.start_time = time.time()
 
@@ -163,6 +189,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down API server...")
+    if db:
+        db.close()
 
 
 # Create FastAPI app with lifespan
@@ -225,6 +253,50 @@ class CacheStatsResponse(BaseModel):
     hit_rate_pct: float
     backend: str
     memory_cache_size: int
+
+
+class SubscriptionStatusResponse(BaseModel):
+    """Response model for subscription status."""
+
+    plan: str = Field(..., description="Subscription plan: free or pro")
+    status: str = Field(..., description="Subscription status")
+    is_active: bool = Field(..., description="Whether subscription is active")
+    stripe_subscription_id: Optional[str] = Field(
+        default=None, description="Stripe subscription ID"
+    )
+    current_period_end: Optional[datetime] = Field(
+        default=None, description="Subscription renewal date"
+    )
+    days_remaining: Optional[int] = Field(
+        default=None, description="Days until renewal"
+    )
+
+
+class CreateCheckoutSessionRequest(BaseModel):
+    """Request model for creating Stripe checkout session."""
+
+    github_user_id: int = Field(..., description="GitHub user ID")
+    github_username: str = Field(..., description="GitHub username")
+    email: str = Field(..., description="User email")
+    success_url: str = Field(..., description="Success URL after checkout")
+    cancel_url: str = Field(..., description="Cancel URL after checkout")
+
+
+class CheckoutSessionResponse(BaseModel):
+    """Response model for checkout session."""
+
+    session_id: str = Field(..., description="Stripe checkout session ID")
+    checkout_url: str = Field(..., description="URL to redirect user for payment")
+
+
+class UsageCheckResponse(BaseModel):
+    """Response model for usage check."""
+
+    can_scan: bool = Field(..., description="Whether user can scan a repository")
+    message: str = Field(..., description="Explanation of the status")
+    remaining_scans: int = Field(..., description="Remaining scans for current period")
+    subscription_plan: str = Field(..., description="User's subscription plan")
+    weekly_usage: int = Field(..., description="Number of scans used this week")
 
 
 @app.get("/cache/stats", response_model=CacheStatsResponse)
