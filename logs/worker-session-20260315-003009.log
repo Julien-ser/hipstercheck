@@ -3050,3 +3050,16 @@ Index: /home/julien/Desktop/Free-Wiggum-opencode/projects/hipstercheck/models/tr
 Now let's run training again:
 📝 Log saved: logs/iteration-11.md
 📊 Token Usage: 6500 / Session: 61000 / 64000
+❌ [ERROR] OpenCode crashed with exit code: 130
+⚠️  Stopping worker - manual intervention needed
+    Check logs/iteration-11.md for details
+🚀 Pushing final changes to GitHub...
+[main 706a785] Final worker session push
+ 5 files changed, 694 insertions(+), 7 deletions(-)
+ create mode 100644 dataset/synthetic_dataset.py
+ create mode 100644 dataset/synthetic_stats.json
+To https://github.com/Julien-ser/hipstercheck.git
+   ff2101f..706a785  main -> main
+✅ Final push to GitHub successful!
+✅ Worker finished
+❌ Worker interrupted
