@@ -13,6 +13,11 @@ from peft import PeftModel, PeftConfig
 from typing import Dict, Any, Optional
 import logging
 
+try:
+    import json5
+except ImportError:
+    json5 = None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -293,6 +298,11 @@ Review:"""
                     try:
                         return json.loads(json_str)
                     except json.JSONDecodeError:
+                        if json5 is not None:
+                            try:
+                                return json5.loads(json_str)
+                            except Exception:
+                                pass
                         # Break to fallback
                         break
         # Fallback to simple first-last brace method
