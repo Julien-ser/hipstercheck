@@ -137,7 +137,7 @@ def test_inference_setup():
 
 
 @pytest.mark.skip(reason="Requires model download which times out in CI")
-def test_file_analysis():
+def test_file_analysis(model):
     """Test analysis of each sample file."""
     print("\n" + "=" * 60)
     print("TEST 3: Code Analysis on Sample Files")

@@ -10,8 +10,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import pytest
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent))
 
 from repo_scanner import RepoScanner, SUPPORTED_EXTENSIONS, EXCLUDED_DIRS
 
