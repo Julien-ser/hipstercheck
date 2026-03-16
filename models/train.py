@@ -1,329 +1,235 @@
 #!/usr/bin/env python3
 """
-Fine-tune Phi-2 model on code review dataset using LoRA.
+hipstercheck - LoRA Fine-Tuning for Code Review Model
 
-Usage:
-    python models/train.py
-
-Prerequisites:
-    1. Dataset prepared in dataset/split_*.jsonl
-    2. Hugging Face token set (HF_TOKEN env var)
-    3. GPU recommended (or set use_gpu: false in config.yaml)
+Fine-tune Phi-2 on code review dataset using LoRA.
+Generates structured reviews with severity, line_number, suggestion, explanation.
 """
 
 import os
-import sys
 import json
 import yaml
-import logging
-from pathlib import Path
-from datetime import datetime
-
 import torch
+from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     TrainingArguments,
     Trainer,
     DataCollatorForLanguageModeling,
-    set_seed,
 )
 from peft import LoraConfig, get_peft_model, TaskType
-from datasets import Dataset, load_dataset
-import numpy as np
+from typing import Dict, List
+import logging
 
-# Setup logging
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    datefmt="%m/%d/%Y %H:%M:%S",
-    level=logging.INFO,
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def load_config(config_path: str) -> dict:
-    """Load training configuration from YAML."""
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-    logger.info(f"Loaded config from {config_path}")
-    return config
+class CodeReviewTrainer:
+    """Fine-tune Phi-2 for code review generation."""
 
+    def __init__(self, config_path: str = "models/config.yaml"):
+        with open(config_path, "r") as f:
+            self.config = yaml.safe_load(f)
 
-def prepare_dataset(file_path: str, tokenizer, max_length: int) -> Dataset:
-    """
-    Load and preprocess dataset for training.
+        self.model_name = self.config["model"]["name"]
+        self.max_seq_length = self.config["model"]["max_seq_length"]
+        self.output_dir = self.config["output"]["output_dir"]
 
-    Args:
-        file_path: Path to JSONL file with examples
-        tokenizer: Hugging Face tokenizer
-        max_length: Maximum sequence length
+        os.makedirs(self.output_dir, exist_ok=True)
 
-    Returns:
-        Tokenized Dataset object
-    """
-    logger.info(f"Loading dataset from {file_path}")
+    def load_tokenizer(self):
+        """Load and configure tokenizer."""
+        logger.info(f"Loading tokenizer: {self.model_name}")
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
-    # Load JSONL dataset
-    dataset = load_dataset("json", data_files=file_path, split="train")
+        # Set padding token if not present
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-    logger.info(f"Loaded {len(dataset)} examples")
+        return tokenizer
 
-    def format_example(example):
-        """Format example into instruction tuning format."""
-        # Expecting: {"code": "...", "review": {...}}
-        code = example.get("code", "")
-        review = example.get("review", {})
+    def load_model(self):
+        """Load base model with LoRA configuration."""
+        logger.info(f"Loading model: {self.model_name}")
 
-        # Format review as JSON string
-        if isinstance(review, dict):
-            review_str = json.dumps(review, indent=2)
-        else:
-            review_str = str(review)
+        # Determine torch dtype
+        torch_dtype_str = self.config["model"].get("torch_dtype", "float16")
+        torch_dtype = torch.bfloat16 if torch_dtype_str == "bfloat16" else torch.float16
 
-        # Construct prompt
-        prompt = f"""[INST] <<SYS>>
-You are an expert code reviewer. Analyze the following code for:
-1. Bugs and potential errors
-2. Performance optimizations
-3. Best practice violations
-4. Security issues
-
-Output format (JSON):
-{{
-  "severity": "high|medium|low",
-  "line_number": <line number or null>,
-  "category": "bug|optimization|style|security",
-  "suggestion": "<concise fix>",
-  "explanation": "<detailed reasoning>"
-}}
-<</SYS>>
-
-Code file: example.py
-Language: python
-
-{code}
-
-Analyze the code above and provide your review. [/INST]"""
-
-        # Target response
-        target = f"\n\n```json\n{review_str}\n```"
-
-        # Combine prompt + target for training
-        full_text = prompt + target
-
-        tokenized = tokenizer(
-            full_text,
-            truncation=True,
-            max_length=max_length,
-            padding="max_length",
-            return_tensors="pt",
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype=torch_dtype,
+            trust_remote_code=True,
+            device_map="auto" if torch.cuda.is_available() else None,
         )
 
-        # Labels are same as input_ids for causal LM
-        labels = tokenized.input_ids[0].clone()
+        # Configure LoRA
+        lora_config = LoraConfig(
+            r=self.config["lora"]["r"],
+            lora_alpha=self.config["lora"]["lora_alpha"],
+            target_modules=self.config["lora"]["target_modules"],
+            lora_dropout=self.config["lora"]["lora_dropout"],
+            bias=self.config["lora"]["bias"],
+            task_type=TaskType.CAUSAL_LM,
+        )
 
-        # Mask out prompt tokens (set to -100) so we only compute loss on response
-        prompt_len = len(tokenizer(prompt, truncation=False)["input_ids"])
-        labels[:prompt_len] = -100
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
 
-        return {
-            "input_ids": tokenized.input_ids[0],
-            "attention_mask": tokenized.attention_mask[0],
-            "labels": labels,
+        return model
+
+    def prepare_dataset(self, tokenizer, split: str = "train"):
+        """Load and preprocess dataset."""
+        dataset_files = {
+            "train": self.config["dataset"]["train_file"],
+            "validation": self.config["dataset"]["validation_file"],
+            "test": self.config["dataset"]["test_file"],
         }
 
-    # Tokenize dataset
-    tokenized_dataset = dataset.map(
-        format_example, remove_columns=dataset.column_names, desc="Tokenizing dataset"
-    )
+        file_path = dataset_files.get(split)
+        if not file_path or not os.path.exists(file_path):
+            raise FileNotFoundError(f"Dataset file not found: {file_path}")
 
-    logger.info(f"Dataset prepared with {len(tokenized_dataset)} examples")
-    return tokenized_dataset
+        logger.info(f"Loading dataset from {file_path}")
 
+        # Load JSONL file
+        with open(file_path, "r") as f:
+            data = [json.loads(line) for line in f]
 
-def compute_metrics(eval_pred):
-    """Compute evaluation metrics."""
-    predictions, labels = eval_pred
-    predictions = np.argmax(predictions, axis=-1)
+        # Prepare formatted examples
+        formatted_data = []
+        prompt_template = self.config["dataset"]["prompt_template"]
+        response_template = self.config["dataset"]["response_template"]
 
-    # Compute cross-entropy loss
-    loss = torch.nn.functional.cross_entropy(
-        torch.tensor(predictions).float(), torch.tensor(labels).long()
-    )
+        for item in data:
+            # Extract fields
+            code = item.get("code", "")
+            review = item.get("review", {})
+            language = item.get("language", "python")
 
-    return {"eval_loss": loss.item()}
+            # Format review as JSON
+            review_json = json.dumps(review, indent=2)
 
+            # Create prompt
+            prompt = prompt_template.format(code=code, language=language)
+            response = response_template.format(review_json=review_json)
 
-def train(config: dict):
-    """Main training function."""
+            # Concatenate for causal LM training
+            text = prompt + response
 
-    # Set seed for reproducibility
-    set_seed(42)
+            formatted_data.append({"text": text, "code": code, "review": review})
 
-    # Device setup
-    use_gpu = config.get("use_gpu", True)
-    if use_gpu and torch.cuda.is_available():
-        device = torch.device("cuda")
-        logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
-        logger.info(
-            f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB"
+        logger.info(f"Prepared {len(formatted_data)} examples for {split}")
+
+        # Tokenize
+        def tokenize_function(examples):
+            tokenized = tokenizer(
+                examples["text"],
+                truncation=True,
+                padding="max_length",
+                max_length=self.max_seq_length,
+            )
+            tokenized["labels"] = tokenized["input_ids"].copy()
+            return tokenized
+
+        from datasets import Dataset
+        dataset = Dataset.from_list(formatted_data)
+        tokenized_dataset = dataset.map(
+            tokenize_function,
+            batched=True,
+            remove_columns=["text", "code", "review"],
         )
-    else:
-        device = torch.device("cpu")
-        logger.info("Using CPU for training")
-        # Disable mixed precision on CPU
-        config["training"]["fp16"] = False
-        config["training"]["bf16"] = False
-        config["training"]["gradient_checkpointing"] = False
 
-    # Load tokenizer and model
-    model_name = config["model"]["name"]
-    logger.info(f"Loading model: {model_name}")
+        return tokenized_dataset
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name, trust_remote_code=config["model"]["trust_remote_code"]
-    )
-    tokenizer.pad_token = tokenizer.eos_token
+    def train(self):
+        """Run training loop."""
+        tokenizer = self.load_tokenizer()
+        model = self.load_model()
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        trust_remote_code=config["model"]["trust_remote_code"],
-        torch_dtype=torch.float16
-        if config["training"]["fp16"] and use_gpu
-        else torch.float32,
-    )
-    model.to(device)
+        # Prepare datasets
+        train_dataset = self.prepare_dataset(tokenizer, split="train")
+        eval_dataset = self.prepare_dataset(tokenizer, split="validation")
 
-    # Apply LoRA
-    logger.info("Applying LoRA adapters...")
-    lora_config = LoraConfig(
-        r=config["lora"]["r"],
-        lora_alpha=config["lora"]["lora_alpha"],
-        target_modules=config["lora"]["target_modules"],
-        lora_dropout=config["lora"]["lora_dropout"],
-        bias=config["lora"]["bias"],
-        task_type=TaskType.CAUSAL_LM,
-    )
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
-
-    # Prepare datasets
-    train_dataset = prepare_dataset(
-        config["training"]["train_file"], tokenizer, config["tokenizer"]["max_length"]
-    )
-    eval_dataset = (
-        prepare_dataset(
-            config["training"]["val_file"], tokenizer, config["tokenizer"]["max_length"]
+        # Training arguments
+        training_args = TrainingArguments(
+            output_dir=self.output_dir,
+            num_train_epochs=self.config["training"]["num_train_epochs"],
+            per_device_train_batch_size=self.config["training"]["per_device_train_batch_size"],
+            gradient_accumulation_steps=self.config["training"]["gradient_accumulation_steps"],
+            learning_rate=self.config["training"]["learning_rate"],
+            warmup_steps=self.config["training"]["warmup_steps"],
+            logging_dir=self.config["output"]["logging_dir"],
+            logging_steps=self.config["training"]["logging_steps"],
+            save_steps=self.config["training"]["save_steps"],
+            eval_steps=self.config["training"]["eval_steps"],
+            evaluation_strategy="steps",
+            save_strategy="steps",
+            load_best_model_at_end=True,
+            fp16=self.config["training"]["fp16"] and torch.cuda.is_available(),
+            gradient_checkpointing=self.config["training"]["gradient_checkpointing"],
+            optim=self.config["training"]["optim"],
+            save_total_limit=self.config["training"]["save_total_limit"],
+            report_to="none",  # Disable wandb, tensorboard etc.
+            push_to_hub=self.config["output"]["push_to_hub"],
         )
-        if os.path.exists(config["training"]["val_file"])
-        else None
-    )
 
-    # Data collator
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,  # Causal LM, not masked LM
-    )
+        # Data collator
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer=tokenizer,
+            mlm=False,  # Causal language modeling
+        )
 
-    # Training arguments
-    training_args = TrainingArguments(
-        output_dir=config["training"]["output_dir"],
-        num_train_epochs=config["training"]["num_train_epochs"],
-        per_device_train_batch_size=config["training"]["per_device_train_batch_size"],
-        per_device_eval_batch_size=config["training"]["per_device_eval_batch_size"],
-        gradient_accumulation_steps=config["training"]["gradient_accumulation_steps"],
-        optim=config["training"]["optim"],
-        learning_rate=config["training"]["learning_rate"],
-        weight_decay=config["training"]["weight_decay"],
-        warmup_ratio=config["training"]["warmup_ratio"],
-        lr_scheduler_type=config["training"]["lr_scheduler_type"],
-        logging_steps=config["training"]["logging_steps"],
-        save_steps=config["training"]["save_steps"],
-        eval_steps=config["training"].get("eval_steps"),
-        evaluation_strategy=config["training"]["evaluation_strategy"],
-        save_strategy=config["training"]["save_strategy"],
-        save_total_limit=config["training"]["save_total_limit"],
-        load_best_model_at_end=config["training"]["load_best_model_at_end"],
-        metric_for_best_model=config["training"]["metric_for_best_model"],
-        greater_is_better=config["training"]["greater_is_better"],
-        fp16=config["training"]["fp16"] and use_gpu,
-        bf16=config["training"]["bf16"] and use_gpu,
-        gradient_checkpointing=config["training"]["gradient_checkpointing"] and use_gpu,
-        tf32=config["training"].get("tf32", True) and use_gpu,
-        report_to="none",  # Disable wandb/tensorboard for now
-        push_to_hub=False,
-        remove_unused_columns=False,
-    )
+        # Trainer
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            data_collator=data_collator,
+            tokenizer=tokenizer,
+        )
 
-    # Trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=data_collator,
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics if eval_dataset else None,
-    )
+        # Train
+        logger.info("Starting training...")
+        train_result = trainer.train()
 
-    # Train
-    logger.info("Starting training...")
-    train_result = trainer.train()
-    metrics = train_result.metrics
+        # Save model
+        logger.info(f"Saving model to {self.output_dir}")
+        trainer.save_model(self.output_dir)
+        tokenizer.save_pretrained(self.output_dir)
 
-    # Log training metrics
-    logger.info(f"Training completed. Metrics: {metrics}")
+        # Save training metrics
+        metrics = train_result.metrics
+        metrics_file = os.path.join(self.output_dir, "train_metrics.json")
+        with open(metrics_file, "w") as f:
+            json.dump(metrics, f, indent=2)
 
-    # Save model
-    logger.info(f"Saving model to {config['training']['output_dir']}")
-    trainer.save_model(config["training"]["output_dir"])
-    tokenizer.save_pretrained(config["training"]["output_dir"])
+        logger.info(f"Training complete. Metrics: {metrics}")
+        logger.info(f"Model saved to {self.output_dir}")
 
-    # Save training metrics
-    output_dir = Path(config["training"]["output_dir"])
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with open(output_dir / "train_results.txt", "w") as f:
-        f.write(json.dumps(metrics, indent=2))
-
-    logger.info("Training complete!")
+        return trainer, metrics
 
 
 def main():
-    """Entry point."""
-    try:
-        # Load config
-        config_path = Path(__file__).parent / "config.yaml"
-        if not config_path.exists():
-            logger.error(f"Config file not found: {config_path}")
-            sys.exit(1)
+    """Main training pipeline."""
+    import argparse
 
-        config = load_config(str(config_path))
+    parser = argparse.ArgumentParser(description="Fine-tune Phi-2 for code review")
+    parser.add_argument("--config", type=str, default="models/config.yaml", help="Path to config file")
+    args = parser.parse_args()
 
-        # Check for HF token
-        if not os.getenv("HF_TOKEN"):
-            logger.warning(
-                "HF_TOKEN environment variable not set. "
-                "You may need to authenticate for gated models."
-            )
+    # Check CUDA availability
+    if torch.cuda.is_available():
+        logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        logger.warning("No GPU detected. Training will be slow on CPU.")
 
-        # Check dataset files exist
-        for key in ["train_file", "val_file"]:
-            path = Path(config["training"][key])
-            if not path.exists():
-                logger.error(f"Dataset file not found: {path}")
-                logger.error("Please run dataset collection first.")
-                sys.exit(1)
-
-        # Create output directory
-        output_dir = Path(config["training"]["output_dir"])
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Run training
-        train(config)
-
-    except Exception as e:
-        logger.error(f"Training failed: {e}", exc_info=True)
-        sys.exit(1)
+    # Run training
+    trainer = CodeReviewTrainer(config_path=args.config)
+    trainer.train()
 
 
 if __name__ == "__main__":

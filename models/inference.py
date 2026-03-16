@@ -1,305 +1,195 @@
 #!/usr/bin/env python3
 """
-Inference wrapper for fine-tuned Phi-2 code review model.
+hipstercheck - Model Inference for Code Review
 
-This module provides a simple interface for loading the model and generating
-code reviews. Designed to be used by the FastAPI backend.
+Loads fine-tuned Phi-2 model and provides inference API.
 """
 
 import os
 import json
-import logging
-from typing import Dict, Any, Optional
-from pathlib import Path
-
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel, PeftConfig
+from typing import Dict, Any, Optional
+import logging
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class CodeReviewModel:
-    """Wrapper for fine-tuned Phi-2 code review model."""
+class CodeReviewInference:
+    """Inference wrapper for code review model."""
 
-    def __init__(
-        self,
-        model_path: str = "./models/checkpoints/phi2-code-review",
-        base_model_name: str = "microsoft/phi-2",
-        device: Optional[str] = None,
-        max_new_tokens: int = 512,
-        temperature: float = 0.2,
-        top_p: float = 0.9,
-        repetition_penalty: float = 1.1,
-    ):
-        """
-        Initialize the code review model.
+    def __init__(self, model_path: str = "models/checkpoints/phi2-code-review"):
+        self.model_path = model_path
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.tokenizer = None
+        self.model = None
+        self.prompt_template = self._load_prompt_template()
 
-        Args:
-            model_path: Path to LoRA fine-tuned model (or None for base model only)
-            base_model_name: Hugging Face model name for the base model
-            device: Device to use ('cuda', 'cpu', or None for auto-detect)
-            max_new_tokens: Maximum tokens to generate
-            temperature: Sampling temperature (0 = greedy)
-            top_p: Top-p sampling parameter
-            repetition_penalty: Penalty for repeating tokens
-        """
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.max_new_tokens = max_new_tokens
-        self.temperature = temperature
-        self.top_p = top_p
-        self.repetition_penalty = repetition_penalty
-
-        logger.info(f"Loading model on device: {self.device}")
-
-        # Load tokenizer
-        logger.info(f"Loading tokenizer from {base_model_name}")
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            base_model_name, trust_remote_code=True
-        )
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # Load base model
-        logger.info(f"Loading base model: {base_model_name}")
-        torch_dtype = torch.float16 if self.device == "cuda" else torch.float32
-        self.model = AutoModelForCausalLM.from_pretrained(
-            base_model_name,
-            trust_remote_code=True,
-            torch_dtype=torch_dtype,
-        )
-        self.model.to(self.device)
-        self.model.eval()
-
-        # Load LoRA weights if available
-        if model_path and Path(model_path).exists():
-            logger.info(f"Loading LoRA weights from {model_path}")
-            self.model = PeftModel.from_pretrained(
-                self.model,
-                model_path,
-                torch_dtype=torch_dtype,
-            )
-            logger.info("LoRA weights loaded successfully")
+    def _load_prompt_template(self) -> str:
+        """Load prompt template from config or default."""
+        config_path = os.path.join(self.model_path, "config.yaml")
+        if os.path.exists(config_path):
+            import yaml
+            with open(config_path, "r") as f:
+                config = yaml.safe_load(f)
+            return config["dataset"]["prompt_template"]
         else:
-            logger.warning("No LoRA weights found. Using base model only.")
+            # Default template
+            return """Analyze this code and provide a code review:
+[Language: {language}]
 
-        logger.info("Model loaded and ready for inference")
+Code:
+{code}
 
-    def create_prompt(
-        self, code: str, filename: str = "example.py", language: str = "python"
-    ) -> str:
+Provide a review in JSON format with the following fields:
+{
+  "severity": "high|medium|low",
+  "line_number": <int>,
+  "category": "bug|optimization|style|security|best_practice",
+  "suggestion": "<concise suggestion>",
+  "explanation": "<detailed explanation>",
+  "code_example": "<optional corrected code>"
+}
+
+Review:"""
+
+    def load(self):
+        """Load the fine-tuned model and tokenizer."""
+        logger.info(f"Loading model from {self.model_path}")
+
+        # Check if it's a LoRA checkpoint
+        config_path = os.path.join(self.model_path, "adapter_config.json")
+        if os.path.exists(config_path):
+            # LoRA model - need base model
+            peft_config = PeftConfig.from_pretrained(self.model_path)
+            base_model_path = peft_config.base_model_name_or_path
+
+            logger.info(f"Loading base model: {base_model_path}")
+            tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+            model = AutoModelForCausalLM.from_pretrained(
+                base_model_path,
+                torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                device_map="auto" if torch.cuda.is_available() else None,
+                trust_remote_code=True,
+            )
+            model = PeftModel.from_pretrained(model, self.model_path)
+        else:
+            # Fully merged model
+            tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+            model = AutoModelForCausalLM.from_pretrained(
+                self.model_path,
+                torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                device_map="auto" if torch.cuda.is_available() else None,
+                trust_remote_code=True,
+            )
+
+        # Set padding token
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model.eval()
+        self.tokenizer = tokenizer
+        self.model = model
+
+        logger.info("Model loaded successfully")
+        return self
+
+    def generate_review(self, code: str, language: str = "python", max_new_tokens: int = 512) -> Dict[str, Any]:
         """
-        Create the instruction prompt for code review.
+        Generate code review for given code snippet.
 
         Args:
             code: Source code to review
-            filename: Name of the file (for context)
-            language: Programming language
+            language: Programming language (python, cpp, etc.)
+            max_new_tokens: Maximum tokens to generate
 
         Returns:
-            Formatted prompt string
+            Dictionary with review fields: severity, line_number, category, suggestion, explanation, code_example
         """
-        prompt = f"""[INST] <<SYS>>
-You are an expert code reviewer. Analyze the following code for:
-1. Bugs and potential errors
-2. Performance optimizations
-3. Best practice violations
-4. Security issues
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model not loaded. Call load() first.")
 
-Output format (JSON):
-{{
-  "severity": "high|medium|low",
-  "line_number": <line number or null>,
-  "category": "bug|optimization|style|security",
-  "suggestion": "<concise fix>",
-  "explanation": "<detailed reasoning>"
-}}
-<</SYS>>
+        # Create prompt
+        prompt = self.prompt_template.format(code=code, language=language)
 
-Code file: {filename}
-Language: {language}
+        # Tokenize
+        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-{code}
-
-Analyze the code above and provide your review. [/INST]"""
-        return prompt
-
-    def generate(self, prompt: str) -> str:
-        """
-        Generate a code review from the model.
-
-        Args:
-            prompt: Input prompt with code to review
-
-        Returns:
-            Generated review text (may include JSON)
-        """
-        inputs = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=2048,
-        ).to(self.device)
-
+        # Generate
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=self.max_new_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                repetition_penalty=self.repetition_penalty,
-                do_sample=(self.temperature > 0),
-                pad_token_id=self.tokenizer.eos_token_id,
+                max_new_tokens=max_new_tokens,
+                temperature=0.2,
+                top_p=0.95,
+                do_sample=False,  # Use greedy decoding for consistency
+                pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
             )
 
-        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        # Extract only the generated part (after the prompt)
-        response = response[len(prompt) :].strip()
-        return response
+        # Decode response
+        full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        response_start = full_output.find("Review:") + len("Review:")
+        response_text = full_output[response_start:].strip()
 
-    def review_code(
-        self, code: str, filename: str = None, language: str = "python"
-    ) -> Dict[str, Any]:
-        """
-        Complete code review with structured output parsing.
-
-        Args:
-            code: Source code to review
-            filename: Optional filename for context
-            language: Programming language
-
-        Returns:
-            Dictionary with review results
-        """
-        if filename is None:
-            filename = f"example.{language}"
-
-        prompt = self.create_prompt(code, filename, language)
-        response = self.generate(prompt)
-
-        # Try to extract JSON from response
-        review = self._extract_json(response)
-
-        # Add metadata
-        review["_raw_response"] = response
-        review["_model"] = "phi-2-finetuned"
+        # Parse JSON from response
+        try:
+            # Find JSON object in response
+            json_start = response_text.find("{")
+            json_end = response_text.rfind("}") + 1
+            if json_start != -1 and json_end != -1:
+                json_str = response_text[json_start:json_end]
+                review = json.loads(json_str)
+            else:
+                # Fallback: try to parse entire response
+                review = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response: {e}")
+            logger.error(f"Response text: {response_text}")
+            review = {
+                "severity": "unknown",
+                "line_number": 0,
+                "category": "parsing_error",
+                "suggestion": "Model output could not be parsed as JSON",
+                "explanation": response_text[:500],
+                "code_example": None,
+            }
 
         return review
 
-    def _extract_json(self, text: str) -> Dict[str, Any]:
-        """
-        Extract JSON object from model response.
-
-        The model may output JSON within markdown code blocks or as plain text.
-        """
-        import re
-
-        # Try to find JSON in code blocks
-        json_match = re.search(r"```(?:json)?\s*({.*?})\s*```", text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(1)
-        else:
-            # Try to find any JSON object
-            json_match = re.search(r"({.*?})", text, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-            else:
-                # Fallback: parse entire response
-                json_str = text
-
-        try:
-            parsed = json.loads(json_str)
-            # Ensure required fields
-            defaults = {
-                "severity": "medium",
-                "line_number": None,
-                "category": "general",
-                "suggestion": "",
-                "explanation": "",
-            }
-            for key, default in defaults.items():
-                if key not in parsed:
-                    parsed[key] = default
-            return parsed
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse JSON: {e}")
-            return {
-                "severity": "medium",
-                "line_number": None,
-                "category": "general",
-                "suggestion": "Review output could not be parsed",
-                "explanation": text[:500],  # Include raw response truncated
-                "_parse_error": True,
-            }
-
-    def batch_review(self, code_files: list) -> list:
-        """
-        Review multiple code files in batch.
-
-        Args:
-            code_files: List of dicts with keys: 'code', 'filename', 'language'
-
-        Returns:
-            List of review results
-        """
-        results = []
-        for file in code_files:
-            try:
-                review = self.review_code(
-                    code=file["code"],
-                    filename=file.get("filename"),
-                    language=file.get("language", "python"),
-                )
-                results.append(review)
-            except Exception as e:
-                logger.error(f"Failed to review {file.get('filename')}: {e}")
-                results.append(
-                    {
-                        "severity": "error",
-                        "line_number": None,
-                        "category": "system",
-                        "suggestion": "Review failed",
-                        "explanation": str(e),
-                        "_error": True,
-                    }
-                )
-        return results
-
-
-# Singleton instance for the FastAPI backend
-_model_instance = None
-
-
-def get_model() -> CodeReviewModel:
-    """
-    Get or create the singleton model instance.
-    This ensures the model is loaded only once in memory.
-    """
-    global _model_instance
-    if _model_instance is None:
-        # Check for model path in environment
-        model_path = os.getenv("MODEL_PATH", "./models/checkpoints/phi2-code-review")
-        base_model = os.getenv("BASE_MODEL", "microsoft/phi-2")
-
-        _model_instance = CodeReviewModel(
-            model_path=model_path if Path(model_path).exists() else None,
-            base_model_name=base_model,
-        )
-    return _model_instance
+    def batch_generate(self, code_snippets: list, language: str = "python") -> list:
+        """Generate reviews for multiple code snippets."""
+        reviews = []
+        for code in code_snippets:
+            review = self.generate_review(code, language)
+            reviews.append(review)
+        return reviews
 
 
 if __name__ == "__main__":
-    # Test inference
-    logging.basicConfig(level=logging.INFO)
+    # Quick test
+    import argparse
 
-    test_code = """
-def calculate_sum(a, b):
-    return a + b
+    parser = argparse.ArgumentParser(description="Test code review inference")
+    parser.add_argument("--model_path", type=str, default="models/checkpoints/phi2-code-review")
+    parser.add_argument("--code_file", type=str, help="Path to code file to review")
+    args = parser.parse_args()
 
-print(calculate_sum(5, 10))
+    inference = CodeReviewInference(model_path=args.model_path)
+    inference.load()
+
+    if args.code_file:
+        with open(args.code_file, "r") as f:
+            code = f.read()
+    else:
+        code = """
+def compute(x, y):
+    temp = x + y
+    return x * y
 """
 
-    model = get_model()
-    review = model.review_code(test_code, filename="test.py")
-
+    review = inference.generate_review(code)
     print(json.dumps(review, indent=2))

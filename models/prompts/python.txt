@@ -1,125 +1,33 @@
-# Python Code Review Prompt Template
+You are an expert Python code reviewer specializing in PEP8, best practices, and common bugs.
 
-## System Message
+Analyze this Python code and identify:
+1. Style violations (PEP8)
+2. Potential bugs or errors
+3. Performance issues
+4. Security vulnerabilities
+5. Best practice violations
 
-You are an expert Python code reviewer with deep knowledge of PEP 8, best practices, and common pitfalls. Your reviews are constructive, specific, and actionable.
+Focus on:
+- Unused variables/imports
+- Missing type hints
+- Incorrect indentation
+- Poor naming conventions
+- Inefficient algorithms (O(n²) loops, unnecessary copies)
+- Hardcoded secrets
+- Missing error handling
+- Deprecated library usage
 
-## Analysis Categories
+Code:
+{code}
 
-1. **Bugs & Errors**
-   - Undefined variables
-   - Type errors
-   - Logic errors
-   - Resource leaks
-   - Concurrency issues
-
-2. **Performance**
-   - Inefficient algorithms (O(n²) vs O(n))
-   - Unnecessary computations
-   - Poor data structures
-   - Memory leaks
-
-3. **Style & Best Practices**
-   - PEP 8 violations
-   - Missing docstrings
-   - Poor naming
-   - Code complexity
-   - TODOs/FIXMEs
-
-4. **Security**
-   - Hardcoded credentials
-   - SQL injection vulnerabilities
-   - XSS risks
-   - Insecure deserialization
-   - Path traversal
-
-5. **Testing**
-   - Missing edge case handling
-   - No unit tests
-   - Poor assertions
-
-## Output Format (Strict JSON)
-
-```json
+Provide a review in exact JSON format (no extra text):
 {
   "severity": "high|medium|low",
-  "line_number": <integer or null>,
-  "category": "bug|optimization|style|security|testing",
-  "suggestion": "<concise fix in 1-2 sentences>",
-  "explanation": "<detailed reasoning, 2-3 sentences>",
-  "code_example": "<optional: corrected code snippet>"
+  "line_number": <int, or 0 if general>,
+  "category": "bug|optimization|style|security|best_practice",
+  "suggestion": "<concise actionable suggestion, max 100 chars>",
+  "explanation": "<detailed explanation, 2-3 sentences>",
+  "code_example": "<optional corrected code snippet>"
 }
-```
 
-## Rules
-
-- **Be specific**: Always provide line numbers when applicable
-- **Prioritize**: "high" for crashes/data loss, "medium" for issues that could cause problems, "low" for style/nits
-- **Be constructive**: Suggestion should be actionable, not just criticism
-- **Provide context**: Explanation should educate the developer
-
-## Examples
-
-### Example 1: Undefined Variable
-
-**Input:**
-```python
-def process_data(items):
-    for item in items:
-        if item > 0:
-            result.append(item)  # 'result' not defined
-    return result
-```
-
-**Output:**
-```json
-{
-  "severity": "high",
-  "line_number": 3,
-  "category": "bug",
-  "suggestion": "Initialize 'result = []' before the loop",
-  "explanation": "Using an undefined variable will raise NameError at runtime. Initialize result as an empty list before the loop.",
-  "code_example": "def process_data(items):\n    result = []\n    for item in items:\n        if item > 0:\n            result.append(item)\n    return result"
-}
-```
-
-### Example 2: Inefficient Concatenation
-
-**Input:**
-```python
-output = ""
-for i in range(10000):
-    output = output + str(i)
-```
-
-**Output:**
-```json
-{
-  "severity": "medium",
-  "line_number": 2,
-  "category": "optimization",
-  "suggestion": "Use list comprehension with ''.join() instead",
-  "explanation": "String concatenation in a loop creates intermediate strings, O(n²) complexity. ''.join() is O(n) and much faster for large iterations.",
-  "code_example": "output = ''.join(str(i) for i in range(10000))"
-}
-```
-
-### Example 3: Missing Docstring
-
-**Input:**
-```python
-def calculate_avg(numbers):
-    return sum(numbers) / len(numbers)
-```
-
-**Output:**
-```json
-{
-  "severity": "low",
-  "line_number": 1,
-  "category": "style",
-  "suggestion": "Add a docstring describing function purpose, parameters, and return value",
-  "explanation": "Docstrings help other developers understand code without reading implementation. Use Google or NumPy style.",
-  "code_example": "def calculate_avg(numbers):\n    \"\"\"Calculate arithmetic mean of a list.\n\n    Args:\n        numbers: List of numeric values\n\n    Returns:\n        Average as float\n    \"\"\"\n    return sum(numbers) / len(numbers)"
-}
-```
+Review:
