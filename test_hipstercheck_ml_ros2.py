@@ -114,9 +114,11 @@ def test_inference_setup():
         # Check if checkpoint exists
         if not Path(model_path).exists():
             print(f"⚠️  No fine-tuned checkpoint at {model_path}")
-            print("   Using base Phi-2 model from Hugging Face...")
-            # Override to use base model directly
-            model = CodeReviewInference(model_path="microsoft/phi-2")
+            print("   Using base model from Hugging Face...")
+            # Use smaller model by default to avoid OOM; override with HIPSTERCHECK_TEST_MODEL env var
+            test_model = os.getenv("HIPSTERCHECK_TEST_MODEL", "distilgpt2")
+            print(f"   Selected model: {test_model}")
+            model = CodeReviewInference(model_path=test_model)
         else:
             model = CodeReviewInference(model_path=model_path)
 
