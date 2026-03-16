@@ -32,7 +32,7 @@ Validate via Reddit's r/Startup_Ideas or indie hacker forums.
  - [x] **Set up Stripe subscription** - Add Stripe Checkout for $10/month; gate analysis behind subscription; add free tier: 1 repo scan/week; store user subscription status
 
 ## Phase 4: Testing, Deployment & Validation
-- [ ] **Test with personal ROS2/ML projects** - Run scans on sample ROS2 nodes, PyTorch models, scikit-learn pipelines; verify detection of common issues (uninitialized variables, missing type hints)
+- [ ] [DEBUG-NEEDED] - [ ] **Test with personal ROS2/ML projects** - Run scans on sample ROS2 nodes, PyTorch models, scikit-learn pipelines; verify detection of common issues (uninitialized variables, missing type hints)
 - [ ] ] **Deploy backend on Vercel** - Deploy FastAPI as serverless function; configure environment variables (HF token, Stripe keys); set up monitoring with Vercel Analytics
 - [ ] ] **Deploy Streamlit frontend on Vercel** - Containerize with Docker or use Streamlit Community Cloud; connect to live backend; add custom domain
 - [ ] ] **Validate via Reddit/Indie Hackers** - Post MVP demo in r/Startup_Ideas, r/MLQuestions, Indie Hackers; collect 50 signups; iterate based on feedback; document roadmap issues
