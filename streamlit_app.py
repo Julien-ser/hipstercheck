@@ -2,6 +2,8 @@ import streamlit as st
 import streamlit_authenticator as stauth
 from github import Github
 import os
+import requests
+import json
 from repo_scanner import RepoScanner
 
 # Page configuration
@@ -13,6 +15,7 @@ st.set_page_config(
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 APP_URL = os.getenv("APP_URL", "http://localhost:8501")
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 # Validate credentials
 if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
@@ -58,6 +61,75 @@ if "selected_files" not in st.session_state:
     st.session_state.selected_files = []
 if "selected_repo" not in st.session_state:
     st.session_state.selected_repo = None
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = None
+if "analysis_error" not in st.session_state:
+    st.session_state.analysis_error = None
+
+
+def fetch_file_content_from_github(github_token: str, repo_full_name: str, file_path: str) -> str:
+    """
+    Fetch file content from GitHub using the API.
+
+    Args:
+        github_token: GitHub OAuth token
+        repo_full_name: Repository full name (e.g., "user/repo")
+        file_path: Path to file within repository
+
+    Returns:
+        File content as string, or None if failed
+    """
+    try:
+        gh = Github(github_token)
+        repo = gh.get_repo(repo_full_name)
+        file_content = repo.get_contents(file_path)
+        # Check if it's a file (not a directory)
+        if isinstance(file_content, list):
+            return None
+        return file_content.decoded_content.decode("utf-8")
+    except Exception as e:
+        logger.error(f"Failed to fetch {file_path}: {e}")
+        return None
+
+
+def analyze_files_with_api(code_snippets, api_url):
+    """
+    Send code snippets to FastAPI backend for analysis.
+
+    Args:
+        code_snippets: List of dicts with keys: code, language, filename
+        api_url: FastAPI backend URL
+
+    Returns:
+        List of analysis results or None if error occurred
+    """
+    try:
+        # Send batch request
+        response = requests.post(
+            f"{api_url.rstrip('/')}/analyze/batch",
+            json={"code_snippets": code_snippets},
+            timeout=30  # Allow up to 30s for batch processing
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            if "results" in result:
+                return result["results"]
+            else:
+                st.error(f"Unexpected response format: {result}")
+                return None
+        else:
+            st.error(f"API request failed: {response.status_code} - {response.text}")
+            return None
+
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to connect to API backend: {str(e)}")
+        st.info(f"Make sure the FastAPI backend is running at {api_url}")
+        return None
+    except Exception as e:
+        st.error(f"Analysis failed: {str(e)}")
+        return None
+
 
 # Handle OAuth callback
 query_params = st.query_params
@@ -241,6 +313,8 @@ if st.session_state.token and st.session_state.github_user:
                     if st.button("🔄 Clear Scan", use_container_width=True):
                         st.session_state.scan_result = None
                         st.session_state.selected_files = []
+                        st.session_state.analysis_results = None
+                        st.session_state.analysis_error = None
                         st.rerun()
 
                 if scan_button or st.session_state.scan_result:
@@ -389,19 +463,100 @@ if st.session_state.token and st.session_state.github_user:
                                     )
 
                                     # Analyze button
-                                    if st.button(
-                                        "🚀 Analyze Selected Files",
-                                        type="primary",
-                                        use_container_width=True,
-                                    ):
-                                        st.session_state.analyze_triggered = True
+                                if st.button(
+                                    "🚀 Analyze Selected Files",
+                                    type="primary",
+                                    use_container_width=True,
+                                ):
+                                    with st.spinner("Analyzing files with AI..."):
+                                        # Call FastAPI backend
+                                        results = analyze_files_with_api(
+                                            st.session_state.selected_files, API_URL
+                                        )
+                                        if results:
+                                            st.session_state.analysis_results = results
+                                            st.session_state.analysis_error = None
+                                            st.success(
+                                                f"✅ Analysis complete! Found {len(results)} reviews."
+                                            )
+                                        else:
+                                            st.session_state.analysis_results = None
+                                            st.session_state.analysis_error = True
                                         st.rerun()
 
-                                    # Show placeholder for analysis results (Phase 3)
-                                    if hasattr(st.session_state, "analyze_triggered"):
-                                        st.info(
-                                            "🚧 AI analysis will be implemented in Phase 3! The FastAPI backend will process these files."
-                                        )
+                                # Display analysis results if available
+                                if st.session_state.analysis_results:
+                                    st.markdown("---")
+                                    st.header("📋 Code Review Results")
+
+                                    # Summary metrics
+                                    total_reviews = len(st.session_state.analysis_results)
+                                    high_count = sum(
+                                        1
+                                        for r in st.session_state.analysis_results
+                                        if r.get("severity") == "high"
+                                    )
+                                    medium_count = sum(
+                                        1
+                                        for r in st.session_state.analysis_results
+                                        if r.get("severity") == "medium"
+                                    )
+                                    low_count = sum(
+                                        1
+                                        for r in st.session_state.analysis_results
+                                        if r.get("severity") in ["low", "info"]
+                                    )
+
+                                    col1, col2, col3, col4 = st.columns(4)
+                                    with col1:
+                                        st.metric("Total Reviews", total_reviews)
+                                    with col2:
+                                        st.metric("🔴 High", high_count, delta_color="inverse")
+                                    with col3:
+                                        st.metric("🔵 Medium", medium_count)
+                                    with col4:
+                                        st.metric("🟢 Low/Info", low_count)
+
+                                    st.markdown("---")
+
+                                    # Display individual results in expanders
+                                    for idx, review in enumerate(st.session_state.analysis_results):
+                                        file_path = review.get("file_path", "Unknown file")
+                                        severity = review.get("severity", "unknown")
+                                        category = review.get("category", "unknown")
+                                        suggestion = review.get("suggestion", "No suggestion")
+                                        explanation = review.get("explanation", "No explanation")
+                                        line_number = review.get("line_number", 0)
+                                        code_example = review.get("code_example")
+
+                                        # Determine color based on severity
+                                        if severity == "high":
+                                            label_color = "🔴"
+                                            expander_color = "red"
+                                        elif severity == "medium":
+                                            label_color = "🔵"
+                                            expander_color = "blue"
+                                        elif severity in ["low", "info"]:
+                                            label_color = "🟢"
+                                            expander_color = "green"
+                                        else:
+                                            label_color = "⚪"
+                                            expander_color = "gray"
+
+                                        # Create expander with file name and severity
+                                        expander_title = f"{label_color} {file_path} (Line {line_number}) - {severity.upper()}"
+                                        with st.expander(expander_title, expanded=False):
+                                            st.markdown(f"**Category:** `{category}`")
+                                            st.markdown(f"**Suggestion:** {suggestion}")
+                                            st.markdown("**Explanation:**")
+                                            st.markdown(f"> {explanation}")
+                                            if code_example:
+                                                st.markdown("**Code Example:**")
+                                                st.code(code_example, language=file_path.split(".")[-1] if "." in file_path else "python")
+                                            st.caption(f"File: `{file_path}`")
+
+                                elif st.session_state.analysis_error:
+                                    st.error("❌ Analysis failed. Please try again or check the backend connection.")
                                 else:
                                     st.caption(
                                         "Select files by checking the boxes above"
