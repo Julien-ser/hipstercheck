@@ -4,7 +4,12 @@ from github import Github
 import os
 import requests
 import json
+import logging
 from repo_scanner import RepoScanner
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Page configuration
 st.set_page_config(
@@ -131,6 +136,65 @@ def analyze_files_with_api(code_snippets, api_url):
         return None
 
 
+def display_analysis_results(analysis_results):
+    """Display analysis results in expanders with color-coded severity."""
+    st.markdown("---")
+    st.header("📋 Code Review Results")
+    
+    # Summary metrics
+    total_reviews = len(analysis_results)
+    high_count = sum(1 for r in analysis_results if r.get("severity") == "high")
+    medium_count = sum(1 for r in analysis_results if r.get("severity") == "medium")
+    low_count = sum(1 for r in analysis_results if r.get("severity") in ["low", "info"])
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Reviews", total_reviews)
+    with col2:
+        st.metric("🟡 High", high_count, delta_color="inverse")
+    with col3:
+        st.metric("🔵 Medium", medium_count)
+    with col4:
+        st.metric("🟢 Low/Info", low_count)
+    
+    st.markdown("---")
+    
+    # Display individual results in expanders
+    for idx, review in enumerate(analysis_results):
+        file_path = review.get("file_path", "Unknown file")
+        severity = review.get("severity", "unknown")
+        category = review.get("category", "unknown")
+        suggestion = review.get("suggestion", "No suggestion")
+        explanation = review.get("explanation", "No explanation")
+        line_number = review.get("line_number", 0)
+        code_example = review.get("code_example")
+        
+        # Determine color based on severity
+        if severity == "high":
+            label_color = "🟡"  # Yellow for high
+            expander_color = "yellow"
+        elif severity == "medium":
+            label_color = "🔵"
+            expander_color = "blue"
+        elif severity in ["low", "info"]:
+            label_color = "🟢"
+            expander_color = "green"
+        else:
+            label_color = "⚪"
+            expander_color = "gray"
+        
+        # Create expander with file name and severity
+        expander_title = f"{label_color} {file_path} (Line {line_number}) - {severity.upper()}"
+        with st.expander(expander_title, expanded=False):
+            st.markdown(f"**Category:** `{category}`")
+            st.markdown(f"**Suggestion:** {suggestion}")
+            st.markdown("**Explanation:**")
+            st.markdown(f"> {explanation}")
+            if code_example:
+                st.markdown("**Code Example:**")
+                st.code(code_example, language=file_path.split(".")[-1] if "." in file_path else "python")
+            st.caption(f"File: `{file_path}`")
+
 # Handle OAuth callback
 query_params = st.query_params
 if "code" in query_params and "state" in query_params:
@@ -167,56 +231,56 @@ if st.session_state.token and st.session_state.github_user:
     col1, col2 = st.columns([1, 4])
     with col1:
         st.image(user.avatar_url, width=100)
-     with col2:
-         st.title(f"👋 Welcome, {user.login}!")
-         st.markdown(f"**Name:** {user.name or 'N/A'}  \n**Bio:** {user.bio or 'N/A'}")
-     st.markdown("---")
+    with col2:
+        st.title(f"👋 Welcome, {user.login}!")
+        st.markdown(f"**Name:** {user.name or 'N/A'}  \n**Bio:** {user.bio or 'N/A'}")
+    st.markdown("---")
+    
+    # Rate limit and cache status
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("🔄 Refresh Rate Limit", type="secondary", use_container_width=True):
+            st.rerun()
+    with col2:
+        if st.session_state.repo_scanner and st.session_state.repo_scanner.use_redis:
+            st.success("✅ Redis Cache")
+        else:
+            st.info("⚠️ Memory Cache")
+    with col3:
+        if st.button("🗑️ Clear Cache", type="secondary", use_container_width=True):
+            if st.session_state.repo_scanner:
+                st.session_state.repo_scanner._cache.clear()
+                try:
+                    if st.session_state.repo_scanner.use_redis and st.session_state.repo_scanner.redis_client:
+                        st.session_state.repo_scanner.redis_client.flushdb()
+                except:
+                    pass
+            st.success("Cache cleared!")
+            st.rerun()
      
-     # Rate limit and cache status
-     col1, col2, col3 = st.columns(3)
-     with col1:
-         if st.button("🔄 Refresh Rate Limit", type="secondary", use_container_width=True):
-             st.rerun()
-     with col2:
-         if st.session_state.repo_scanner and st.session_state.repo_scanner.use_redis:
-             st.success("✅ Redis Cache")
-         else:
-             st.info("⚠️ Memory Cache")
-     with col3:
-         if st.button("🗑️ Clear Cache", type="secondary", use_container_width=True):
-             if st.session_state.repo_scanner:
-                 st.session_state.repo_scanner._cache.clear()
-                 try:
-                     if st.session_state.repo_scanner.use_redis and st.session_state.repo_scanner.redis_client:
-                         st.session_state.repo_scanner.redis_client.flushdb()
-                 except:
-                     pass
-             st.success("Cache cleared!")
-             st.rerun()
-     
-     # Display GitHub API rate limit
-     if st.session_state.repo_scanner:
-         rate_info = st.session_state.repo_scanner.check_rate_limit()
-         if "error" not in rate_info:
-             remaining = rate_info.get("remaining", 0)
-             limit = rate_info.get("limit", 0)
-             pct = (remaining / limit * 100) if limit > 0 else 0
-            
-             if pct < 20:
-                 st.error(f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
-             elif pct < 50:
-                 st.warning(f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
-             else:
-                 st.info(f"✅ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
-            
-             if rate_info.get("reset_time"):
-                 from datetime import datetime
-                 reset_dt = datetime.fromisoformat(rate_info["reset_time"])
-                 st.caption(f"Resets at: {reset_dt.strftime('%Y-%m-%d %H:%M:%S')}")
-         else:
-             st.error(f"Rate limit check failed: {rate_info['error']}")
-     
-     st.markdown("---")
+    # Display GitHub API rate limit
+    if st.session_state.repo_scanner:
+        rate_info = st.session_state.repo_scanner.check_rate_limit()
+        if "error" not in rate_info:
+            remaining = rate_info.get("remaining", 0)
+            limit = rate_info.get("limit", 0)
+            pct = (remaining / limit * 100) if limit > 0 else 0
+
+            if pct < 20:
+                st.error(f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
+            elif pct < 50:
+                st.warning(f"⚠️ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
+            else:
+                st.info(f"✅ GitHub API: {remaining}/{limit} requests remaining ({pct:.1f}%)")
+
+            if rate_info.get("reset_time"):
+                from datetime import datetime
+                reset_dt = datetime.fromisoformat(rate_info["reset_time"])
+                st.caption(f"Resets at: {reset_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            st.error(f"Rate limit check failed: {rate_info['error']}")
+
+    st.markdown("---")
 
     # Display connected repositories
     st.header("📚 Your GitHub Repositories")
@@ -462,22 +526,70 @@ if st.session_state.token and st.session_state.github_user:
                                         f"📌 Selected {len(selected_files)} files for analysis"
                                     )
 
-                                    # Analyze button
+                                # Analyze button
                                 if st.button(
                                     "🚀 Analyze Selected Files",
                                     type="primary",
                                     use_container_width=True,
                                 ):
+                                    with st.spinner("Fetching file contents from GitHub..."):
+                                        # Fetch code content for each selected file
+                                        code_snippets = []
+                                        github_token = st.session_state.token["access_token"]
+                                        selected_repo = st.session_state.selected_repo
+
+                                        for file_info in st.session_state.selected_files:
+                                            file_path = file_info["path"]
+                                            file_language = file_info.get("language", "Python")
+
+                                            # Fetch file content from GitHub
+                                            content = fetch_file_content_from_github(
+                                                github_token, selected_repo, file_path
+                                            )
+
+                                            if content is not None:
+                                                code_snippets.append({
+                                                    "code": content,
+                                                    "language": file_language,
+                                                    "filename": file_path
+                                                })
+                                            else:
+                                                st.warning(f"⚠️ Could not fetch content for {file_path}")
+
+                                        if not code_snippets:
+                                            st.error("❌ No file content could be fetched. Please try again.")
+                                            st.stop()
+
+                                        st.info(f"📦 Prepared {len(code_snippets)} files for analysis")
+
                                     with st.spinner("Analyzing files with AI..."):
-                                        # Call FastAPI backend
-                                        results = analyze_files_with_api(
-                                            st.session_state.selected_files, API_URL
+                                        # Call FastAPI backend with actual code content
+                                        response = analyze_files_with_api(
+                                            code_snippets, API_URL
                                         )
-                                        if results:
-                                            st.session_state.analysis_results = results
-                                            st.session_state.analysis_error = None
+
+                                        if response:
+                                            # Map results back to files using index
+                                            enriched_results = []
+                                            for result in response:
+                                                idx = result.get("index", 0)
+                                                review = result.get("review", {})
+
+                                                # Add file information from our code_snippets
+                                                if idx < len(code_snippets):
+                                                    snippet = code_snippets[idx]
+                                                    review["file_path"] = snippet["filename"]
+
+                                                enriched_results.append(review)
+
+                                            st.session_state.analysis_results = enriched_results
+    st.session_state.analysis_error = None
+if "demo_analysis_results" not in st.session_state:
+    st.session_state.demo_analysis_results = None
+if "demo_analysis_error" not in st.session_state:
+    st.session_state.demo_analysis_error = None
                                             st.success(
-                                                f"✅ Analysis complete! Found {len(results)} reviews."
+                                                f"✅ Analysis complete! Found {len(enriched_results)} reviews."
                                             )
                                         else:
                                             st.session_state.analysis_results = None
@@ -511,7 +623,7 @@ if st.session_state.token and st.session_state.github_user:
                                     with col1:
                                         st.metric("Total Reviews", total_reviews)
                                     with col2:
-                                        st.metric("🔴 High", high_count, delta_color="inverse")
+                                         st.metric("🟡 High", high_count, delta_color="inverse")
                                     with col3:
                                         st.metric("🔵 Medium", medium_count)
                                     with col4:
@@ -531,7 +643,7 @@ if st.session_state.token and st.session_state.github_user:
 
                                         # Determine color based on severity
                                         if severity == "high":
-                                            label_color = "🔴"
+                                             label_color = "🟡"
                                             expander_color = "red"
                                         elif severity == "medium":
                                             label_color = "🔵"
@@ -604,6 +716,84 @@ else:
     - ✅ Fast analysis with progress tracking
     """)
 
+    st.markdown("---")
+    st.header("🛠️ Quick Demo")
+    st.markdown("""
+    Try a quick code review before signing in:
+    1. Upload a file or paste code below
+    2. Select language if pasting
+    3. Click **Analyze** to see AI-powered feedback
+    """)
+    
+    demo_method = st.radio("Input method", ["Upload File", "Paste Code"], horizontal=True, key="demo_method")
+    demo_snippets = []
+    
+    if demo_method == "Upload File":
+        demo_uploaded = st.file_uploader(
+            "Upload a code file",
+            type=["py", "js", "ts", "java", "c", "cpp", "yaml", "txt", "ipynb", "launch", "msg"],
+            accept_multiple_files=False,
+            key="demo_uploader"
+        )
+        if demo_uploaded:
+            content = demo_uploaded.getvalue().decode("utf-8")
+            ext = demo_uploaded.name.split(".")[-1].lower() if "." in demo_uploaded.name else ""
+            # Simple language mapping
+            lang_map = {
+                "py": "python",
+                "js": "javascript",
+                "ts": "typescript",
+                "java": "java",
+                "c": "c",
+                "cpp": "cpp",
+                "h": "c",
+                "hpp": "cpp",
+                "yaml": "yaml",
+                "yml": "yaml",
+                "ipynb": "python",
+                "launch": "ros2",
+                "msg": "ros2",
+                "txt": "text"
+            }
+            language = lang_map.get(ext, "text")
+            demo_snippets.append({
+                "code": content,
+                "language": language,
+                "filename": demo_uploaded.name
+            })
+            st.info(f"Loaded: {demo_uploaded.name}")
+    else:
+        demo_language = st.selectbox(
+            "Language",
+            ["python", "javascript", "typescript", "java", "c", "cpp", "yaml", "ros2", "text"],
+            key="demo_language"
+        )
+        demo_code = st.text_area("Paste your code", height=300, key="demo_code")
+        if demo_code.strip():
+            demo_snippets.append({
+                "code": demo_code,
+                "language": demo_language,
+                "filename": "pasted_code"
+            })
+    
+    if demo_snippets and st.button("🚀 Analyze Demo", type="primary", key="demo_analyze"):
+        with st.spinner("Analyzing..."):
+            results = analyze_files_with_api(demo_snippets, API_URL)
+            if results:
+                st.session_state.demo_analysis_results = results
+                st.session_state.demo_analysis_error = None
+                st.success(f"✅ Analysis complete! Found {len(results)} reviews.")
+            else:
+                st.session_state.demo_analysis_error = True
+        st.rerun()
+    
+    if st.session_state.get("demo_analysis_results"):
+        st.markdown("---")
+        display_analysis_results(st.session_state.demo_analysis_results)
+    elif st.session_state.get("demo_analysis_error"):
+        st.error("❌ Analysis failed. Please try again or check the backend connection.")
+    
+    # Separator before sign-in
     st.markdown("---")
     st.header("🔐 Sign in with GitHub")
     col1, col2, col3 = st.columns([1, 2, 1])

@@ -27,7 +27,7 @@ Validate via Reddit's r/Startup_Ideas or indie hacker forums.
 
 ## Phase 3: App Integration & Deployment Prep
 - [x] **Wrap model in FastAPI microservice** - Expose `/analyze` endpoint that takes code snippets, returns JSON reviews; add request timeout <5s per file; use `uvicorn` with async
-- [ ] **Integrate model calls into Streamlit** - Upload code files or paste snippets; call FastAPI; display reviews in collapsible UI with color-coded severity (high=yellow, medium=blue)
+- [x] **Integrate model calls into Streamlit** - Upload code files or paste snippets; call FastAPI; display reviews in collapsible UI with color-coded severity (high=yellow, medium=blue)
 - [ ] **Implement result caching** - Use SQLite or Redis to cache repo hashes → review results; reduce model calls; add "re-scan" button; show cache hit rate
 - [ ] ] **Set up Stripe subscription** - Add Stripe Checkout for $10/month; gate analysis behind subscription; add free tier: 1 repo scan/week; store user subscription status
 

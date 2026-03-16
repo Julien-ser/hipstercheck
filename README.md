@@ -9,6 +9,7 @@ hipstercheck is an AI-powered code review tool that scans GitHub repositories fo
 - 🔍 **Smart Code Analysis**: Detect bugs, performance issues, and style violations
 - 🤖 **AI-Powered Reviews**: Fine-tuned open-source LLM for accurate suggestions
 - 🚀 **GitHub Integration**: Seamless OAuth and repository scanning
+- 📝 **Manual Upload & Paste**: Try the Quick Demo on the landing page - upload files or paste code snippets directly without GitHub login
 - ⚡ **Fast Results**: Analysis completed in under 60 seconds
 - 💰 **Affordable**: $10/month per user with free tier (1 repo scan/week)
 - 🎯 **Specialized Support**: Python (PEP8), ROS2 best practices, ML frameworks (PyTorch, TensorFlow, scikit-learn)
@@ -37,13 +38,15 @@ Before running the app, you need to create a GitHub OAuth App:
    ```bash
    cp .env.example .env
    ```
-6. Edit `.env`:
-   ```bash
-   GITHUB_CLIENT_ID=your_client_id
-   GITHUB_CLIENT_SECRET=your_client_secret
-   APP_URL=http://localhost:8501
-   ```
-   *(Note: `APP_URL` must match the callback URL from step 2)*
+ 6. Edit `.env`:
+    ```bash
+    GITHUB_CLIENT_ID=your_client_id
+    GITHUB_CLIENT_SECRET=your_client_secret
+    APP_URL=http://localhost:8501
+    API_URL=http://localhost:8000
+    ```
+    *(Note: `APP_URL` must match the callback URL from step 2)*
+    *(Note: `API_URL` points to the FastAPI backend - start it with `python api.py`)*
 
 ### 2. Install Dependencies
 
@@ -230,7 +233,7 @@ These templates ensure consistent, high-quality reviews across all supported lan
 
 ### Phase 3: App Integration & Deployment Prep
 - [x] Wrap model in FastAPI microservice
-- [ ] Integrate model calls into Streamlit
+- [x] Integrate model calls into Streamlit
 - [ ] Implement result caching
 - [ ] Set up Stripe subscription
 
