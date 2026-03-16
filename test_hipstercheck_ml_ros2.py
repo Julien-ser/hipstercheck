@@ -326,15 +326,23 @@ def update_tasks_md():
         return
 
     content = tasks_path.read_text()
-    # Find the testing task line and mark it complete
-    old_line = "- [x] **Test with personal ROS2/ML projects** - Run scans on sample ROS2 nodes, PyTorch models, scikit-learn pipelines; verify detection of common issues (uninitialized variables, missing type hints)"
-    new_line = "- [x] **Test with personal ROS2/ML projects** - Run scans on sample ROS2 nodes, PyTorch models, scikit-learn pipelines; verify detection of common issues (uninitialized variables, missing type hints)"
-    if old_line in content:
-        content = content.replace(old_line, new_line)
-        tasks_path.write_text(content)
+    lines = content.splitlines()
+    task_identifier = "**Test with personal ROS2/ML projects**"
+    updated = False
+    for i, line in enumerate(lines):
+        if task_identifier in line and line.strip().startswith("- ["):
+            # Replace the checkbox status to checked
+            parts = line.split("]", 1)
+            if len(parts) == 2:
+                lines[i] = "- [x]" + parts[1]
+                updated = True
+    if updated:
+        tasks_path.write_text("\n".join(lines))
         print("✅ TASKS.md updated")
     else:
-        print("⚠️  Task line not found in TASKS.md (might be already marked)")
+        print(
+            "⚠️  Task line not found in TASKS.md (might be already marked or format changed)"
+        )
 
 
 if __name__ == "__main__":
