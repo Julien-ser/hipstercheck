@@ -327,7 +327,7 @@ def update_tasks_md():
 
     content = tasks_path.read_text()
     # Find the testing task line and mark it complete
-    old_line = "- [ ] **Test with personal ROS2/ML projects** - Run scans on sample ROS2 nodes, PyTorch models, scikit-learn pipelines; verify detection of common issues (uninitialized variables, missing type hints)"
+    old_line = "- [x] **Test with personal ROS2/ML projects** - Run scans on sample ROS2 nodes, PyTorch models, scikit-learn pipelines; verify detection of common issues (uninitialized variables, missing type hints)"
     new_line = "- [x] **Test with personal ROS2/ML projects** - Run scans on sample ROS2 nodes, PyTorch models, scikit-learn pipelines; verify detection of common issues (uninitialized variables, missing type hints)"
     if old_line in content:
         content = content.replace(old_line, new_line)
