@@ -776,20 +776,6 @@ async def track_scan(request: TrackScanRequest, db: Session = Depends(get_db)):
         "can_scan_next": can_scan,
     }
 
-    can_scan, message, remaining = can_scan_repo(db, user.id)
-    subscription = get_user_subscription(db, user.id)
-    plan = subscription.plan if subscription else "free"
-
-    weekly_usage = get_weekly_scan_count(db, user.id)
-
-    return UsageCheckResponse(
-        can_scan=can_scan,
-        message=message,
-        remaining_scans=remaining,
-        subscription_plan=plan,
-        weekly_usage=weekly_usage,
-    )
-
 
 if __name__ == "__main__":
     import uvicorn

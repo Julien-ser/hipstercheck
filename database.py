@@ -107,7 +107,7 @@ class UsageTrack(Base):
     repo_full_name = Column(String, index=True, nullable=False)
     scanned_at = Column(DateTime, default=datetime.utcnow)
     # Store additional metadata like file count, scan duration, etc.
-    metadata = Column(JSON, default={})
+    usage_metadata = Column(JSON, default={})
 
     # Relationships
     user = relationship("User", back_populates="usage_tracks")
@@ -234,7 +234,7 @@ def track_repo_scan(
         UsageTrack object
     """
     usage = UsageTrack(
-        user_id=user_id, repo_full_name=repo_full_name, metadata=metadata or {}
+        user_id=user_id, repo_full_name=repo_full_name, usage_metadata=metadata or {}
     )
     db.add(usage)
     db.commit()

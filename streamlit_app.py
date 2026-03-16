@@ -616,7 +616,6 @@ if "code" in query_params and "state" in query_params:
                         "🚫 **Free tier limit reached!** You've used your 1 scan this week. "
                         "Upgrade to Pro for unlimited scans."
                     )
-                    st.button("🚀 Upgrade to Pro", type="primary", use_container_width=True, disabled=not STRIPE_PUBLIC_KEY)
                 else:
                     st.warning(
                         f"⚠️ **Free tier:** {remaining} scan(s) remaining this week. "
