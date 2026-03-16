@@ -90,6 +90,23 @@ This sets how many remaining requests trigger a wait before the reset time.
 streamlit run streamlit_app.py
 ```
 
+### 3. (Optional) Run FastAPI Backend
+
+The FastAPI microservice provides the code analysis endpoint. To run it separately:
+
+```bash
+# Start the API server
+python api.py
+
+# Or with uvicorn directly
+uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+The API will be available at `http://localhost:8000` with:
+- `GET /health` - Health check endpoint
+- `POST /analyze` - Analyze single code snippet (5s timeout)
+- `POST /analyze/batch` - Analyze multiple snippets (max 50)
+
 ### 4. Authenticate & Use
 
 1. Click **"Login with GitHub"** in the app
@@ -101,6 +118,7 @@ streamlit run streamlit_app.py
 
 ```
 hipstercheck/
+├── api.py                    # FastAPI microservice (Phase 3)
 ├── streamlit_app.py          # Main Streamlit frontend
 ├── requirements.txt          # Python dependencies
 ├── .env                      # Environment variables (create from .env.example)
@@ -111,8 +129,6 @@ hipstercheck/
 │   ├── split_val.jsonl      # Validation split
 │   ├── split_test.jsonl     # Test split
 │   └── README.md            # Dataset documentation
-├── backend/                 # FastAPI microservice (Phase 3)
-│   └── main.py
 ├── models/                  # Fine-tuned AI model
 ├── prompts/                 # Prompt templates for different languages
 ├── tests/                   # Unit and integration tests
@@ -213,7 +229,7 @@ Each language has specialized prompts in `models/prompts/`:
 These templates ensure consistent, high-quality reviews across all supported languages.
 
 ### Phase 3: App Integration & Deployment Prep
-- [ ] Wrap model in FastAPI microservice
+- [x] Wrap model in FastAPI microservice
 - [ ] Integrate model calls into Streamlit
 - [ ] Implement result caching
 - [ ] Set up Stripe subscription
